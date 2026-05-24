@@ -1,18 +1,13 @@
 {
-  "name": "photoclinic-insta-designer",
+  "name": "photoclinic-insta",
   "version": "1.0.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
-  },
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
   "dependencies": {
     "next": "14.2.0",
     "react": "^18",
     "react-dom": "^18",
-    "@supabase/supabase-js": "^2",
-    "fabric": "^5.3.1"
+    "@supabase/supabase-js": "^2"
   },
   "devDependencies": {
     "@types/node": "^20",

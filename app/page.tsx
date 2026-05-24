@@ -1,5 +1,2 @@
 import { redirect } from "next/navigation";
-
-export default function RootPage() {
-  redirect("/insta");
-}
+export default function Root() { redirect("/insta"); }
