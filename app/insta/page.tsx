@@ -40,14 +40,12 @@ export default function InstaDesignerPage() {
   const [ratio,       setRatio]      = useState<Ratio>("1:1");
   const [template,    setTemplate]   = useState<Template>("bottom");
   const [textColor,   setTextColor]  = useState("#FFFFFF");
-  const [bgColor,     setBgColor]    = useState("#1C2B28");
   const [fontPair,    setFontPair]   = useState(0);
   const [fontSize,    setFontSize]   = useState(28);
   const [lineH,       setLineH]      = useState(1.5);
   const [letterSp,    setLetterSp]   = useState(0);
   const [textAlign,   setTextAlign]  = useState<"left"|"center"|"right">("center");
   const [showLogo,    setShowLogo]   = useState(true);
-  const [logoStyle,   setLogoStyle]  = useState<"text"|"icon">("text");
   const [overlayAlpha,setOverlayAlpha] = useState(55);
   const [accentColor, setAccentColor]= useState(PC_STYLE.brand.orange);
 
@@ -163,8 +161,12 @@ export default function InstaDesignerPage() {
     setRatio(r);
     if (!fabricRef.current) return;
     const {w,h} = getDims(r);
-    fabricRef.current.setWidth(w); fabricRef.current.setHeight(h);
-    if (imgRef.current) scaleImg(imgRef.current, w, h);
+    fabricRef.current.setWidth(w);
+    fabricRef.current.setHeight(h);
+    if (imgRef.current) {
+      scaleImg(imgRef.current, w, h);
+      applyTemplate(template, w, h);  // 템플릿 오버레이도 재적용
+    }
     fabricRef.current.renderAll();
   };
 
@@ -225,22 +227,44 @@ export default function InstaDesignerPage() {
 
   // ── 필터 적용 ──
   function applyFilter(img?:any) {
-    const Fab = getFab(); if (!Fab) return;
+    const Fab = getFab();
+    if (!Fab || !fabricRef.current) return;   // fabricReady 전 방어
     const target = img || imgRef.current;
     if (!target) return;
-    target.filters = [
-      new Fab.Image.filters.Brightness({ brightness: (brightness-100)/100 }),
-      new Fab.Image.filters.Contrast({ contrast: (contrast-100)/100 }),
-      new Fab.Image.filters.Saturation({ saturation: (saturation-100)/100 }),
+
+    const filters: any[] = [
+      new Fab.Image.filters.Brightness({ brightness: (brightness - 100) / 100 }),
+      new Fab.Image.filters.Contrast({ contrast: (contrast - 100) / 100 }),
+      new Fab.Image.filters.Saturation({ saturation: (saturation - 100) / 100 }),
     ];
-    if (warmth!==0) {
-      target.filters.push(new Fab.Image.filters.ColorMatrix({
-        matrix: warmth>0
-          ? [1+warmth*0.003,0,0,0,warmth*0.8, 0,1,0,0,0, 0,0,1-warmth*0.002,0,0, 0,0,0,1,0]
-          : [1,0,0,0,0, 0,1,0,0,warmth*0.3*-1, 0,0,1+warmth*0.003*-1,0,warmth*1*-1, 0,0,0,1,0]
-      }));
+
+    // 색온도: ColorMatrix 지원 여부 확인 후 적용
+    if (warmth !== 0 && Fab.Image.filters.ColorMatrix) {
+      try {
+        const w = warmth / 50; // -1 ~ 1 정규화
+        // 4x5 matrix: R높이고 B낮추면 따뜻 / R낮추고 B높이면 차갑게
+        const matrix = warmth > 0
+          ? [ 1 + w*0.15, 0, 0, 0, w*8,    // R 증가
+              0, 1, 0, 0, 0,               // G 유지
+              0, 0, 1 - w*0.12, 0, w*-4,  // B 감소
+              0, 0, 0, 1, 0 ]             // A 유지
+          : [ 1 + w*0.1, 0, 0, 0, w*5,    // R 감소 (w<0이면)
+              0, 1, 0, 0, 0,
+              0, 0, 1 - w*0.15, 0, w*-6,  // B 증가
+              0, 0, 0, 1, 0 ];
+        filters.push(new Fab.Image.filters.ColorMatrix({ matrix }));
+      } catch (e) {
+        console.warn("[applyFilter] ColorMatrix 미지원:", e);
+      }
     }
-    target.applyFilters();
+
+    target.filters = filters;
+    try {
+      target.applyFilters();
+    } catch (e) {
+      console.warn("[applyFilter] applyFilters 에러:", e);
+      target.filters = []; // 필터 초기화
+    }
     fabricRef.current?.renderAll();
   }
 
@@ -367,7 +391,6 @@ export default function InstaDesignerPage() {
       selectable:true, name:"logo",
     }));
   }
-  const tmpl = template;
 
   const handleToggleLogo = () => {
     const next=!showLogo; setShowLogo(next);
