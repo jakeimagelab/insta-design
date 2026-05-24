@@ -113,7 +113,7 @@ export default function InstaDesignerPage() {
     const Fab = getFab(); if (!Fab || !canvasRef.current) return;
     try { fabricRef.current?.dispose(); } catch {}
     const { w, h } = getDims(r);
-    fabricRef.current = new Fab.Canvas(canvasRef.current, { width:w, height:h, backgroundColor:"#111" });
+    fabricRef.current = new Fab.Canvas(canvasRef.current, { width:w, height:h, backgroundColor:"#E5F0EE" });
     fabricRef.current.on("mouse:dblclick", (opt:any) => { if(opt.target?.type==="i-text") opt.target.enterEditing(); });
     fabricRef.current.on("object:modified", saveUndoState);
     fabricRef.current.on("object:added",    saveUndoState);
@@ -169,8 +169,18 @@ export default function InstaDesignerPage() {
   };
 
   function scaleImg(img:any, cw:number, ch:number) {
-    const scale = Math.max(cw/img.width, ch/img.height);
-    img.set({ scaleX:scale, scaleY:scale, left:(cw-img.width*scale)/2, top:(ch-img.height*scale)/2 });
+    // naturalWidth/height 가 없으면 width/height 사용
+    const iw = img.width  || (img._element && img._element.naturalWidth)  || 1;
+    const ih = img.height || (img._element && img._element.naturalHeight) || 1;
+    const scale = Math.max(cw / iw, ch / ih);
+    const scaledW = iw * scale;
+    const scaledH = ih * scale;
+    img.set({
+      scaleX: scale,
+      scaleY: scale,
+      left: (cw - scaledW) / 2,
+      top:  (ch - scaledH) / 2,
+    });
   }
 
   // ── 이미지 업로드 ──
@@ -181,10 +191,24 @@ export default function InstaDesignerPage() {
     const reader = new FileReader();
     reader.onload = e => {
       Fab.Image.fromURL(e.target!.result as string, (img:any) => {
+        if (!img) { showToast("이미지 로드 실패"); return; }
         const {w,h} = getDims();
+        img.set({ scaleX:1, scaleY:1, left:0, top:0 });
         scaleImg(img, w, h);
+        img.set({ selectable:true, evented:true });
         fabricRef.current.clear();
-        fabricRef.current.setBackgroundColor("#111", ()=>{});
+        fabricRef.current.setBackgroundColor("#E5F0EE", ()=>{});
+        fabricRef.current.add(img);
+        img.sendToBack();
+        imgRef.current = img;
+        setImageLoaded(true);
+        applyFilter(img);
+        applyTemplate(template, w, h);
+        if (showLogo) addLogo(w, h);
+        fabricRef.current.renderAll();
+        showToast("이미지 업로드 완료");
+        saveUndoState();
+      }, { crossOrigin: "anonymous" });
         fabricRef.current.add(img); img.sendToBack();
         imgRef.current = img;
         setImageLoaded(true);
@@ -194,7 +218,7 @@ export default function InstaDesignerPage() {
         fabricRef.current.renderAll();
         showToast("이미지 업로드 완료");
         saveUndoState();
-      });
+      }, { crossOrigin: "anonymous" });
     };
     reader.readAsDataURL(file);
   }, [fabricReady, template, showLogo, ratio, brightness, contrast, saturation, warmth]);
@@ -295,13 +319,52 @@ export default function InstaDesignerPage() {
   function addLogo(cw:number, ch:number) {
     removeByName("logo");
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
-    const txt = logoStyle==="icon" ? "⬤ PC" : "PHOTO CLINIC";
-    fabricRef.current.add(new Fab.Text(txt, {
-      left:tmpl==="split"?cw-14:cw-12, top:ch-14,
-      fontSize:9, fill:"rgba(255,255,255,0.55)",
-      fontFamily:"'Noto Sans KR',sans-serif", fontWeight:"700",
-      textAlign:"right", originX:"right", originY:"bottom",
-      letterSpacing:2.5, selectable:true, name:"logo",
+    const fc = fabricRef.current;
+    const pad = 14;
+    const logoH = 22;
+    const symbolR = 9; // 심볼 반지름
+    const sx = cw - pad - 80; // 로고 시작 x
+    const sy = ch - pad - logoH;
+    const cx = sx + symbolR;
+    const cy = sy + logoH/2;
+
+    // ── 렌즈 심볼 ──────────────────────────────────
+    // 왼쪽 반원 (오렌지)
+    fc.add(new Fab.Path(`M ${cx} ${cy-symbolR} A ${symbolR} ${symbolR} 0 0 0 ${cx} ${cy+symbolR} Z`, {
+      fill:"#E85D2C", selectable:false, evented:false, name:"logo",
+    }));
+    // 오른쪽 반원 (틸)
+    fc.add(new Fab.Path(`M ${cx} ${cy-symbolR} A ${symbolR} ${symbolR} 0 0 1 ${cx} ${cy+symbolR} Z`, {
+      fill:"#155855", selectable:false, evented:false, name:"logo",
+    }));
+    // 중간 링 왼쪽 (옐로)
+    const r2 = symbolR * 0.62;
+    fc.add(new Fab.Path(`M ${cx} ${cy-r2} A ${r2} ${r2} 0 0 0 ${cx} ${cy+r2} Z`, {
+      fill:"#EB8F22", selectable:false, evented:false, name:"logo",
+    }));
+    // 중간 링 오른쪽 (세이지)
+    fc.add(new Fab.Path(`M ${cx} ${cy-r2} A ${r2} ${r2} 0 0 1 ${cx} ${cy+r2} Z`, {
+      fill:"#569082", selectable:false, evented:false, name:"logo",
+    }));
+    // 중앙 흰 원
+    fc.add(new Fab.Circle({
+      left:cx, top:cy, radius:symbolR*0.32,
+      fill:"rgba(255,255,255,0.9)", originX:"center", originY:"center",
+      selectable:false, evented:false, name:"logo",
+    }));
+
+    // ── PHOTO CLINIC 텍스트 ──────────────────────────
+    fc.add(new Fab.Text("PHOTO", {
+      left: cx + symbolR + 4, top: cy - 5,
+      fontSize:8, fill:"#E85D2C", fontFamily:"'Noto Sans KR',sans-serif",
+      fontWeight:"700", letterSpacing:1.5,
+      selectable:true, name:"logo",
+    }));
+    fc.add(new Fab.Text("CLINIC", {
+      left: cx + symbolR + 4 + 32, top: cy - 5,
+      fontSize:8, fill:"#155855", fontFamily:"'Noto Sans KR',sans-serif",
+      fontWeight:"700", letterSpacing:1.5,
+      selectable:true, name:"logo",
     }));
   }
   const tmpl = template;
@@ -413,7 +476,7 @@ export default function InstaDesignerPage() {
   const {w:cw,h:ch}=getDims();
 
   // ── UI ────────────────────────────────────────────────
-  const darkBg  = "#0F0D0B";
+  const darkBg  = "#111109";
   const panelBg = "#1A1A1A";
   const border  = "#2A2A2A";
   const txt     = "#E8E4DC";
