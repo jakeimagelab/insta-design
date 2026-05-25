@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { PANTONE_PALETTES, FONT_PAIRS, PC_STYLE } from "@/lib/photoclinic-style";
 
 type Ratio       = "1:1"|"4:5"|"9:16";
+type FitMode     = "contain"|"cover";
 type Template    = "photo-bottom"|"photo-top"|"photo-overlay"|"text-only"|"split-v"|"frame";
 type ContentType = "portfolio"|"bts"|"philosophy"|"space"|"profile";
 type CaptionItem = { type:string; text:string };
@@ -48,6 +49,7 @@ export default function InstaDesignerPage() {
   const [accentColor, setAccentColor]= useState(PC_STYLE.brand.orange);
   const [canvasBg,    setCanvasBg]   = useState(CANVAS_BG);
   const [photoPct,    setPhotoPct]   = useState(60);
+  const [photoFit,    setPhotoFit]   = useState<FitMode>("contain"); // contain=사진 전체 보이기, cover=영역 채우기
   // 세로 구분선 전용
   const [dividerColor,setDividerColor]=useState(PC_STYLE.brand.orange);
 
@@ -169,6 +171,7 @@ export default function InstaDesignerPage() {
     setCanUndo(undoRef.current.length>0);
     isRestoringRef.current=true;
     fabricRef.current.loadFromJSON(JSON.parse(prev),()=>{
+      refreshImageRef();
       fabricRef.current.renderAll();
       isRestoringRef.current=false;
     });
@@ -184,6 +187,7 @@ export default function InstaDesignerPage() {
     setCanRedo(redoRef.current.length>0);
     isRestoringRef.current=true;
     fabricRef.current.loadFromJSON(JSON.parse(nxt),()=>{
+      refreshImageRef();
       fabricRef.current.renderAll();
       isRestoringRef.current=false;
     });
@@ -208,34 +212,42 @@ export default function InstaDesignerPage() {
     const {w,h}=getDims(r);
     fabricRef.current.setWidth(w);
     fabricRef.current.setHeight(h);
+
+    // 비율 변경 시 현재 사진을 새 캔버스 영역에 다시 맞춤.
+    // 기존 코드는 cover 방식이라 1:1→4:5, 4:5→9:16 변경 시 사진 일부가 잘렸음.
+    refreshImageRef();
     if(imgRef.current) applyLayout(imgRef.current,template,w,h,true);
     fabricRef.current.renderAll();
   };
 
-  // ── 이미지 스케일 (핵심 수정) ───────────────────────
-  // clipPath 방식 대신 오프스크린 렌더링: top/left로 영역 밖 숨김
-  function fillArea(img:any, cw:number, areaTop:number, areaH:number){
-    // new Fab.Image(el) 방식: img.width/height = el.naturalWidth/Height (원본 픽셀)
-    // scaleX/Y가 1일 때 기준
-    const iw = img.width  || 1;
-    const ih = img.height || 1;
-    // cover: 지정 영역을 꽉 채우는 최소 스케일
-    const scale = Math.max(cw / iw, areaH / ih);
+  function refreshImageRef(){
+    const photo=fabricRef.current?.getObjects().find((o:any)=>o.name==="photo"||o.type==="image");
+    if(photo) imgRef.current=photo;
+  }
+
+  // ── 이미지 스케일 ───────────────────────────────────
+  // contain: 사진 전체가 보이게 맞춤 / cover: 영역을 꽉 채움
+  function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw){
+    const iw = img.width  || img._element?.naturalWidth  || 1;
+    const ih = img.height || img._element?.naturalHeight || 1;
+    const scale = mode==="cover" ? Math.max(areaW / iw, areaH / ih) : Math.min(areaW / iw, areaH / ih);
     const sw = iw * scale;
     const sh = ih * scale;
     img.set({
+      name: "photo",
       scaleX: scale,
       scaleY: scale,
-      left:  (cw - sw) / 2,              // 가로 중앙
-      top:   areaTop + (areaH - sh) / 2, // 세로 중앙 (영역 기준)
+      left:  areaLeft + (areaW - sw) / 2,
+      top:   areaTop  + (areaH - sh) / 2,
       selectable: true,
       evented: true,
     });
+    img.setCoords();
   }
 
   // ── 레이아웃 적용 ────────────────────────────────────
   // clipPath 없이 배경 rect로 사진 영역 외부를 덮는 방식
-  function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean){
+  function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const fc=fabricRef.current;
 
@@ -247,9 +259,9 @@ export default function InstaDesignerPage() {
     fc.setBackgroundColor(canvasBg,()=>{});
 
     if(tmpl==="photo-bottom"){
-      const photoH=Math.round(ch*(photoPct/100));
+      const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
-      fillArea(img,cw,0,photoH);
+      fitArea(img,cw,0,photoH,fitMode);
       fc.add(img);
       // 하단 크림 배경 (사진 영역 외부를 덮음)
       fc.add(new Fab.Rect({left:0,top:photoH,width:cw,height:textH,
@@ -259,9 +271,9 @@ export default function InstaDesignerPage() {
         fill:canvasBg,selectable:false,evented:false,name:"layout-mask"}));
 
     } else if(tmpl==="photo-top"){
-      const photoH=Math.round(ch*(photoPct/100));
+      const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
-      fillArea(img,cw,textH,photoH);
+      fitArea(img,cw,textH,photoH,fitMode);
       fc.add(img);
       // 상단 크림 배경
       fc.add(new Fab.Rect({left:0,top:0,width:cw,height:textH,
@@ -273,21 +285,16 @@ export default function InstaDesignerPage() {
       }
 
     } else if(tmpl==="photo-overlay"){
-      // cover: 캔버스 전체를 채움
-      const scale = Math.max(cw / (img.width||1), ch / (img.height||1));
-      img.set({ scaleX:scale, scaleY:scale,
-                left:(cw - img.width*scale)/2, top:(ch - img.height*scale)/2,
-                selectable:true, evented:true });
+      // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
+      fitArea(img,cw,0,ch,fitMode);
       fc.add(img);
 
     } else if(tmpl==="text-only"){
       // 사진 없이 텍스트만 — img는 추가하지 않음
 
     } else if(tmpl==="split-v"){
-      const scale = Math.max(cw / (img.width||1), ch / (img.height||1));
-      img.set({ scaleX:scale, scaleY:scale,
-                left:(cw - img.width*scale)/2, top:(ch - img.height*scale)/2,
-                selectable:true, evented:true });
+      // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
+      fitArea(img,cw,0,ch,fitMode);
       fc.add(img);
       // 하단 크림 오버레이
       fc.add(new Fab.Rect({left:0,top:ch*0.58,width:cw,height:ch*0.42,
@@ -298,10 +305,8 @@ export default function InstaDesignerPage() {
         hasControls:true,hasBorders:false,lockScalingX:true}));
 
     } else if(tmpl==="frame"){
-      const scale = Math.max(cw / (img.width||1), ch / (img.height||1));
-      img.set({ scaleX:scale, scaleY:scale,
-                left:(cw - img.width*scale)/2, top:(ch - img.height*scale)/2,
-                selectable:true, evented:true });
+      // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
+      fitArea(img,cw,0,ch,fitMode);
       fc.add(img);
       const pad=10;
       // 사진 위에 프레임(배경색) 테두리
@@ -362,7 +367,7 @@ export default function InstaDesignerPage() {
       el.src=url;
     };
     reader.readAsDataURL(file);
-  },[fabricReady,template,ratio,photoPct,showSymbol,canvasBg,dividerColor]); // eslint-disable-line
+  },[fabricReady,template,ratio,photoPct,photoFit,showSymbol,canvasBg,dividerColor]); // eslint-disable-line
 
   // ── 포토클리닉 심볼 ──────────────────────────────────
   function addSymbol(cw:number,ch:number){
@@ -496,8 +501,35 @@ export default function InstaDesignerPage() {
     fabricRef.current.discardActiveObject();
     fabricRef.current.renderAll();
   };
-  const bringFwd=()=>{const o=fabricRef.current?.getActiveObject();if(o){fabricRef.current.bringForward(o);fabricRef.current.renderAll();}};
-  const sendBwd =()=>{const o=fabricRef.current?.getActiveObject();if(o){fabricRef.current.sendBackwards(o);fabricRef.current.renderAll();}};
+  function selectedObjects(){
+    const fc=fabricRef.current; if(!fc) return [];
+    return fc.getActiveObjects?.() || (fc.getActiveObject()?[fc.getActiveObject()]:[]);
+  }
+  function afterLayerChange(msg:string){
+    fabricRef.current?.discardActiveObject();
+    fabricRef.current?.renderAll();
+    showToast(msg);
+  }
+  const bringFwd=()=>{
+    const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
+    objs.forEach((o:any)=>fc.bringForward(o));
+    fc.renderAll();
+  };
+  const sendBwd =()=>{
+    const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
+    objs.forEach((o:any)=>fc.sendBackwards(o));
+    fc.renderAll();
+  };
+  const bringFront=()=>{
+    const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
+    objs.forEach((o:any)=>fc.bringToFront(o));
+    afterLayerChange("맨 앞으로 배치 ✓");
+  };
+  const sendBack=()=>{
+    const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
+    objs.forEach((o:any)=>fc.sendToBack(o));
+    afterLayerChange("맨 뒤로 배치 ✓");
+  };
   const duplicate=()=>{
     const o=fabricRef.current?.getActiveObject();if(!o) return;
     o.clone((c:any)=>{c.set({left:o.left+18,top:o.top+18});fabricRef.current.add(c);fabricRef.current.renderAll();});
@@ -575,8 +607,10 @@ export default function InstaDesignerPage() {
           <button onClick={()=>addShape("line")}     style={bS(false)}>—</button>
           <button onClick={duplicate}                style={bS(false)}>복제</button>
           <button onClick={rotate90}                 style={bS(false)}>↻90°</button>
+          <button onClick={bringFront}               style={bS(false)}>맨앞</button>
           <button onClick={bringFwd}                 style={bS(false)}>앞</button>
           <button onClick={sendBwd}                  style={bS(false)}>뒤</button>
+          <button onClick={sendBack}                 style={bS(false)}>맨뒤</button>
           <button onClick={removeSelected}           style={{...bS(false),color:"#C04020",borderColor:"#FACCB8"}}>삭제</button>
           <div style={{width:1,height:18,background:UI.border}}/>
           <button onClick={handleToggleSymbol} style={bS(showSymbol,UI.teal)}>심볼{showSymbol?" ✓":""}</button>
@@ -664,15 +698,45 @@ export default function InstaDesignerPage() {
                   </div>
                   <input type="range" min={30} max={80} value={photoPct} style={{width:"100%",accentColor:UI.teal}}
                     onChange={e=>{
-                      setPhotoPct(+e.target.value);
+                      const nextPct=+e.target.value;
+                      setPhotoPct(nextPct);
                       if(imgRef.current&&fabricRef.current){
                         const{w,h}=getDims();
-                        applyLayout(imgRef.current,template,w,h);
+                        applyLayout(imgRef.current,template,w,h,false,photoFit,nextPct);
                         fabricRef.current.renderAll();
                       }
                     }}/>
                 </div>
               )}
+              {imageLoaded&&template!=="text-only"&&(
+                <div style={{marginTop:10,padding:"9px",background:UI.bg,borderRadius:8}}>
+                  <div style={{fontSize:10,color:UI.muted,marginBottom:6,fontWeight:700}}>사진 맞춤</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                    <button onClick={()=>{
+                        setPhotoFit("contain");
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"contain",photoPct);fabricRef.current.renderAll();}
+                      }}
+                      style={bS(photoFit==="contain",UI.teal)}>전체 보기</button>
+                    <button onClick={()=>{
+                        setPhotoFit("cover");
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"cover",photoPct);fabricRef.current.renderAll();}
+                      }}
+                      style={bS(photoFit==="cover",UI.accent)}>영역 채우기</button>
+                  </div>
+                  <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>기본값은 사진이 잘리지 않는 ‘전체 보기’입니다.</div>
+                </div>
+              )}
+
+              <div style={{marginTop:10,padding:"9px",background:UI.bg,borderRadius:8}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:6,fontWeight:700}}>선택 콘텐츠 배치</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5}}>
+                  <button onClick={bringFront} style={bS(false)}>맨앞</button>
+                  <button onClick={bringFwd}   style={bS(false)}>앞</button>
+                  <button onClick={sendBwd}    style={bS(false)}>뒤</button>
+                  <button onClick={sendBack}   style={bS(false)}>맨뒤</button>
+                </div>
+                <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>사진·텍스트·도형을 클릭한 뒤 레이어 순서를 바꿀 수 있습니다.</div>
+              </div>
               {/* 세로 구분선 컬러 (split-v일 때만) */}
               {template==="split-v"&&(
                 <div style={{marginTop:12,padding:"10px",background:UI.bg,borderRadius:8}}>
