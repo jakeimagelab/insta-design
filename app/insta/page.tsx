@@ -48,7 +48,9 @@ export default function InstaDesignerPage() {
   const [showSymbol,  setShowSymbol] = useState(true);
   const [accentColor, setAccentColor]= useState(PC_STYLE.brand.orange);
   const [canvasBg,    setCanvasBg]   = useState(CANVAS_BG);
+  const [contentBg,   setContentBg]  = useState(CANVAS_BG);
   const [photoPct,    setPhotoPct]   = useState(60);
+  const [photoZoom,   setPhotoZoom]  = useState(100);
   const [photoFit,    setPhotoFit]   = useState<FitMode>("contain"); // contain=사진 전체 보이기, cover=영역 채우기
   // 세로 구분선 전용
   const [dividerColor,setDividerColor]=useState(PC_STYLE.brand.orange);
@@ -124,7 +126,7 @@ export default function InstaDesignerPage() {
     const Fab=getFab(); if(!Fab||!canvasRef.current) return;
     try{fabricRef.current?.dispose();}catch{}
     const {w,h}=getDims(r);
-    fabricRef.current=new Fab.Canvas(canvasRef.current,{width:w,height:h,backgroundColor:canvasBg});
+    fabricRef.current=new Fab.Canvas(canvasRef.current,{width:w,height:h,backgroundColor:canvasBg,preserveObjectStacking:true});
 
     // 더블클릭 텍스트 편집
     fabricRef.current.on("mouse:dblclick",(opt:any)=>{
@@ -172,7 +174,7 @@ export default function InstaDesignerPage() {
     isRestoringRef.current=true;
     fabricRef.current.loadFromJSON(JSON.parse(prev),()=>{
       refreshImageRef();
-      fabricRef.current.renderAll();
+      ensureFixedOrder();
       isRestoringRef.current=false;
     });
   },[]); // eslint-disable-line
@@ -188,7 +190,7 @@ export default function InstaDesignerPage() {
     isRestoringRef.current=true;
     fabricRef.current.loadFromJSON(JSON.parse(nxt),()=>{
       refreshImageRef();
-      fabricRef.current.renderAll();
+      ensureFixedOrder();
       isRestoringRef.current=false;
     });
   },[]); // eslint-disable-line
@@ -216,8 +218,8 @@ export default function InstaDesignerPage() {
     // 비율 변경 시 현재 사진을 새 캔버스 영역에 다시 맞춤.
     // 기존 코드는 cover 방식이라 1:1→4:5, 4:5→9:16 변경 시 사진 일부가 잘렸음.
     refreshImageRef();
-    if(imgRef.current) applyLayout(imgRef.current,template,w,h,true);
-    fabricRef.current.renderAll();
+    if(imgRef.current) applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);
+    ensureFixedOrder();
   };
 
   function refreshImageRef(){
@@ -225,12 +227,23 @@ export default function InstaDesignerPage() {
     if(photo) imgRef.current=photo;
   }
 
+  function ensureFixedOrder(){
+    const fc=fabricRef.current; if(!fc) return;
+    const objs=fc.getObjects?.()||[];
+    const divider=objs.find((o:any)=>o.name==="divider");
+    const logos=objs.filter((o:any)=>o.name==="logo");
+    if(divider) fc.bringToFront(divider);
+    logos.forEach((o:any)=>fc.bringToFront(o));
+    fc.renderAll();
+  }
+
   // ── 이미지 스케일 ───────────────────────────────────
   // contain: 사진 전체가 보이게 맞춤 / cover: 영역을 꽉 채움
-  function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw){
+  function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw, zoomPct:number=photoZoom){
     const iw = img.width  || img._element?.naturalWidth  || 1;
     const ih = img.height || img._element?.naturalHeight || 1;
-    const scale = mode==="cover" ? Math.max(areaW / iw, areaH / ih) : Math.min(areaW / iw, areaH / ih);
+    const baseScale = mode==="cover" ? Math.max(areaW / iw, areaH / ih) : Math.min(areaW / iw, areaH / ih);
+    const scale = baseScale * (zoomPct/100);
     const sw = iw * scale;
     const sh = ih * scale;
     img.set({
@@ -247,7 +260,7 @@ export default function InstaDesignerPage() {
 
   // ── 레이아웃 적용 ────────────────────────────────────
   // clipPath 없이 배경 rect로 사진 영역 외부를 덮는 방식
-  function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct){
+  function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct, zoomPct:number=photoZoom){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const fc=fabricRef.current;
 
@@ -261,32 +274,32 @@ export default function InstaDesignerPage() {
     if(tmpl==="photo-bottom"){
       const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
-      fitArea(img,cw,0,photoH,fitMode);
+      fitArea(img,cw,0,photoH,fitMode,0,cw,zoomPct);
       fc.add(img);
       // 하단 크림 배경 (사진 영역 외부를 덮음)
       fc.add(new Fab.Rect({left:0,top:photoH,width:cw,height:textH,
-        fill:canvasBg,selectable:false,evented:false,name:"layout-bg"}));
+        fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       // 세로 초과 부분 마스킹 (사진이 photoH 아래로 삐져나오지 않도록)
       fc.add(new Fab.Rect({left:0,top:photoH,width:cw,height:textH,
-        fill:canvasBg,selectable:false,evented:false,name:"layout-mask"}));
+        fill:contentBg,selectable:false,evented:false,name:"layout-mask"}));
 
     } else if(tmpl==="photo-top"){
       const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
-      fitArea(img,cw,textH,photoH,fitMode);
+      fitArea(img,cw,textH,photoH,fitMode,0,cw,zoomPct);
       fc.add(img);
       // 상단 크림 배경
       fc.add(new Fab.Rect({left:0,top:0,width:cw,height:textH,
-        fill:canvasBg,selectable:false,evented:false,name:"layout-bg"}));
+        fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       // 하단 초과 마스킹
       if(photoH+textH<ch){
         fc.add(new Fab.Rect({left:0,top:ch,width:cw,height:ch,
-          fill:canvasBg,selectable:false,evented:false,name:"layout-mask"}));
+          fill:contentBg,selectable:false,evented:false,name:"layout-mask"}));
       }
 
     } else if(tmpl==="photo-overlay"){
       // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
-      fitArea(img,cw,0,ch,fitMode);
+      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
       fc.add(img);
 
     } else if(tmpl==="text-only"){
@@ -294,11 +307,11 @@ export default function InstaDesignerPage() {
 
     } else if(tmpl==="split-v"){
       // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
-      fitArea(img,cw,0,ch,fitMode);
+      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
       fc.add(img);
       // 하단 크림 오버레이
       fc.add(new Fab.Rect({left:0,top:ch*0.58,width:cw,height:ch*0.42,
-        fill:hexToRgba(canvasBg,0.92),selectable:false,evented:false,name:"layout-bg"}));
+        fill:hexToRgba(contentBg,0.92),selectable:false,evented:false,name:"layout-bg"}));
       // 세로 구분선 — selectable:true 로 이동 가능
       fc.add(new Fab.Rect({left:28,top:ch*0.64,width:2.5,height:ch*0.22,
         fill:dividerColor,selectable:true,evented:true,name:"divider",
@@ -306,18 +319,19 @@ export default function InstaDesignerPage() {
 
     } else if(tmpl==="frame"){
       // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
-      fitArea(img,cw,0,ch,fitMode);
+      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
       fc.add(img);
       const pad=10;
       // 사진 위에 프레임(배경색) 테두리
-      fc.add(new Fab.Rect({left:0,top:0,width:cw,height:pad,fill:canvasBg,selectable:false,evented:false,name:"layout-bg"}));
-      fc.add(new Fab.Rect({left:0,top:ch-pad,width:cw,height:pad,fill:canvasBg,selectable:false,evented:false,name:"layout-bg"}));
-      fc.add(new Fab.Rect({left:0,top:0,width:pad,height:ch,fill:canvasBg,selectable:false,evented:false,name:"layout-bg"}));
-      fc.add(new Fab.Rect({left:cw-pad,top:0,width:pad,height:ch,fill:canvasBg,selectable:false,evented:false,name:"layout-bg"}));
+      fc.add(new Fab.Rect({left:0,top:0,width:cw,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      fc.add(new Fab.Rect({left:0,top:ch-pad,width:cw,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      fc.add(new Fab.Rect({left:0,top:0,width:pad,height:ch,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      fc.add(new Fab.Rect({left:cw-pad,top:0,width:pad,height:ch,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
     }
 
     // 로고 심볼 복원 또는 새로 추가
     if(showSymbol) addSymbol(cw,ch);
+    ensureFixedOrder();
   }
 
   const handleTemplate=(tmpl:Template)=>{
@@ -328,15 +342,15 @@ export default function InstaDesignerPage() {
       fabricRef.current.clear();
       fabricRef.current.setBackgroundColor(canvasBg,()=>{});
       if(showSymbol) addSymbol(w,h);
-      fabricRef.current.renderAll();
+      ensureFixedOrder();
     } else if(imgRef.current){
-      applyLayout(imgRef.current,tmpl,w,h);
-      fabricRef.current.renderAll();
+      applyLayout(imgRef.current,tmpl,w,h,false,photoFit,photoPct,photoZoom);
+      ensureFixedOrder();
     } else {
       fabricRef.current.clear();
       fabricRef.current.setBackgroundColor(canvasBg,()=>{});
       if(showSymbol) addSymbol(w,h);
-      fabricRef.current.renderAll();
+      ensureFixedOrder();
     }
   };
 
@@ -356,7 +370,7 @@ export default function InstaDesignerPage() {
         // naturalWidth/Height가 확정된 시점에 Fabric 이미지 객체 생성
         const img=new Fab.Image(el);
         const {w,h}=getDims();
-        applyLayout(img,template,w,h);
+        applyLayout(img,template,w,h,false,photoFit,photoPct,photoZoom);
         imgRef.current=img;
         setImageLoaded(true);
         applyFilter(img);
@@ -367,7 +381,7 @@ export default function InstaDesignerPage() {
       el.src=url;
     };
     reader.readAsDataURL(file);
-  },[fabricReady,template,ratio,photoPct,photoFit,showSymbol,canvasBg,dividerColor]); // eslint-disable-line
+  },[fabricReady,template,ratio,photoPct,photoZoom,photoFit,showSymbol,canvasBg,contentBg,dividerColor]); // eslint-disable-line
 
   // ── 포토클리닉 심볼 ──────────────────────────────────
   function addSymbol(cw:number,ch:number){
@@ -392,7 +406,7 @@ export default function InstaDesignerPage() {
     const next=!showSymbol; setShowSymbol(next);
     if(next){const{w,h}=getDims();addSymbol(w,h);}
     else removeByName("logo");
-    fabricRef.current?.renderAll();
+    ensureFixedOrder();
   };
 
   // ── 필터 ─────────────────────────────────────────────
@@ -450,7 +464,7 @@ export default function InstaDesignerPage() {
       left:leftX,top:topMicro,originX:oX,fontSize:Math.max(9,subFontSize-4),fill:UI.hint,
       fontFamily:`'${fp.body}',sans-serif`,fontWeight:"400",textAlign,width:wLimit,name:"micro-text",
     }));
-    fabricRef.current.renderAll();
+    ensureFixedOrder();
     showToast("텍스트 적용 ✓ · 더블클릭으로 편집");
   }
 
@@ -469,7 +483,7 @@ export default function InstaDesignerPage() {
     if(obj){
       fabricRef.current.add(obj);
       fabricRef.current.setActiveObject(obj);
-      fabricRef.current.renderAll();
+      ensureFixedOrder();
     }
   }
 
@@ -490,7 +504,7 @@ export default function InstaDesignerPage() {
       fontSize,fill:textColor,fontFamily:`'${fp.display}',serif,sans-serif`,fontWeight:"700"});
     fabricRef.current.add(obj);
     fabricRef.current.setActiveObject(obj);
-    fabricRef.current.renderAll();
+    ensureFixedOrder();
     obj.enterEditing();
   };
   const removeSelected=()=>{
@@ -499,7 +513,7 @@ export default function InstaDesignerPage() {
     if(!active.length){showToast("삭제할 객체 선택");return;}
     active.forEach((o:any)=>fabricRef.current.remove(o));
     fabricRef.current.discardActiveObject();
-    fabricRef.current.renderAll();
+    ensureFixedOrder();
   };
   function selectedObjects(){
     const fc=fabricRef.current; if(!fc) return [];
@@ -507,18 +521,18 @@ export default function InstaDesignerPage() {
   }
   function afterLayerChange(msg:string){
     fabricRef.current?.discardActiveObject();
-    fabricRef.current?.renderAll();
+    ensureFixedOrder();
     showToast(msg);
   }
   const bringFwd=()=>{
     const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
     objs.forEach((o:any)=>fc.bringForward(o));
-    fc.renderAll();
+    ensureFixedOrder();
   };
   const sendBwd =()=>{
     const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
     objs.forEach((o:any)=>fc.sendBackwards(o));
-    fc.renderAll();
+    ensureFixedOrder();
   };
   const bringFront=()=>{
     const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
@@ -532,11 +546,11 @@ export default function InstaDesignerPage() {
   };
   const duplicate=()=>{
     const o=fabricRef.current?.getActiveObject();if(!o) return;
-    o.clone((c:any)=>{c.set({left:o.left+18,top:o.top+18});fabricRef.current.add(c);fabricRef.current.renderAll();});
+    o.clone((c:any)=>{c.set({left:o.left+18,top:o.top+18});fabricRef.current.add(c);ensureFixedOrder();});
   };
   const rotate90=()=>{
     const o=fabricRef.current?.getActiveObject();if(!o) return;
-    o.set({angle:(o.angle+90)%360});fabricRef.current.renderAll();
+    o.set({angle:(o.angle+90)%360});ensureFixedOrder();
   };
 
   // ── AI 캡션 ──────────────────────────────────────────
@@ -556,7 +570,7 @@ export default function InstaDesignerPage() {
   // ── 다운로드 ─────────────────────────────────────────
   const download=(fmt:"png"|"jpeg")=>{
     if(!fabricRef.current){showToast("에디터 준비 안 됨");return;}
-    fabricRef.current.discardActiveObject();fabricRef.current.renderAll();
+    fabricRef.current.discardActiveObject();ensureFixedOrder();
     const url=fabricRef.current.toDataURL({format:fmt,quality:0.95,multiplier:2});
     const a=document.createElement("a");a.href=url;
     a.download=`photoclinic_${ratio.replace(":","x")}_${Date.now()}.${fmt==="jpeg"?"jpg":"png"}`;
@@ -692,20 +706,37 @@ export default function InstaDesignerPage() {
                 ))}
               </div>
               {(template==="photo-bottom"||template==="photo-top")&&(
-                <div style={{marginTop:10}}>
+                <div style={{marginTop:10,padding:"9px",background:UI.bg,borderRadius:8}}>
                   <div style={{fontSize:10,color:UI.muted,marginBottom:5,display:"flex",justifyContent:"space-between"}}>
-                    <span>사진 비율</span><span style={{color:UI.teal,fontWeight:700}}>{photoPct}%</span>
+                    <span>{template==="photo-bottom"?"하단 크림 영역":"상단 크림 영역"}</span><span style={{color:UI.teal,fontWeight:700}}>{100-photoPct}%</span>
                   </div>
-                  <input type="range" min={30} max={80} value={photoPct} style={{width:"100%",accentColor:UI.teal}}
+                  <input type="range" min={10} max={70} value={100-photoPct} style={{width:"100%",accentColor:UI.teal}}
                     onChange={e=>{
-                      const nextPct=+e.target.value;
-                      setPhotoPct(nextPct);
+                      const nextPanelPct=+e.target.value;
+                      const nextPhotoPct=100-nextPanelPct;
+                      setPhotoPct(nextPhotoPct);
                       if(imgRef.current&&fabricRef.current){
                         const{w,h}=getDims();
-                        applyLayout(imgRef.current,template,w,h,false,photoFit,nextPct);
-                        fabricRef.current.renderAll();
+                        applyLayout(imgRef.current,template,w,h,false,photoFit,nextPhotoPct,photoZoom);
                       }
                     }}/>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:10}}>
+                    <span style={{fontSize:10,color:UI.muted,minWidth:72}}>크림 색상</span>
+                    {[CANVAS_BG,"#FFFFFF","#F0EBE0","#E5F0EE","#F7E3D7","#1C2B28"].map(hex=>(
+                      <div key={hex} onClick={()=>{
+                          setContentBg(hex);
+                          if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                        }}
+                        style={{width:20,height:20,borderRadius:"50%",background:hex,cursor:"pointer",
+                                border:`2px solid ${contentBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
+                                boxShadow:hex==="#FFFFFF"?"inset 0 0 0 1px #ddd":"none"}}/>
+                    ))}
+                    <input type="color" value={contentBg} onChange={e=>{
+                        setContentBg(e.target.value);
+                        if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                      }}
+                      style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
+                  </div>
                 </div>
               )}
               {imageLoaded&&template!=="text-only"&&(
@@ -714,16 +745,27 @@ export default function InstaDesignerPage() {
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
                     <button onClick={()=>{
                         setPhotoFit("contain");
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"contain",photoPct);fabricRef.current.renderAll();}
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"contain",photoPct,photoZoom);}
                       }}
                       style={bS(photoFit==="contain",UI.teal)}>전체 보기</button>
                     <button onClick={()=>{
                         setPhotoFit("cover");
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"cover",photoPct);fabricRef.current.renderAll();}
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"cover",photoPct,photoZoom);}
                       }}
                       style={bS(photoFit==="cover",UI.accent)}>영역 채우기</button>
                   </div>
-                  <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>기본값은 사진이 잘리지 않는 ‘전체 보기’입니다.</div>
+                  <div style={{marginTop:10}}>
+                    <div style={{fontSize:10,color:UI.muted,marginBottom:5,display:"flex",justifyContent:"space-between"}}>
+                      <span>사진 확대</span><span style={{color:UI.teal,fontWeight:700}}>{photoZoom}%</span>
+                    </div>
+                    <input type="range" min={50} max={120} value={photoZoom} style={{width:"100%",accentColor:UI.teal}}
+                      onChange={e=>{
+                        const nextZoom=+e.target.value;
+                        setPhotoZoom(nextZoom);
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,nextZoom);}
+                      }}/>
+                  </div>
+                  <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>기본값은 사진이 잘리지 않는 ‘전체 보기’이며, 확대는 최대 120%까지 가능합니다.</div>
                 </div>
               )}
 
@@ -763,7 +805,24 @@ export default function InstaDesignerPage() {
                       }}
                       style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
                   </div>
-                  <div style={{fontSize:9,color:UI.hint,lineHeight:1.5}}>구분선을 드래그해서 위치를 이동할 수 있어요</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:10}}>
+                    <span style={{fontSize:10,color:UI.muted,minWidth:72}}>하단 크림</span>
+                    {[CANVAS_BG,"#FFFFFF","#F0EBE0","#E5F0EE","#F7E3D7","#1C2B28"].map(hex=>(
+                      <div key={hex} onClick={()=>{
+                          setContentBg(hex);
+                          if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                        }}
+                        style={{width:20,height:20,borderRadius:"50%",background:hex,cursor:"pointer",
+                                border:`2px solid ${contentBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
+                                boxShadow:hex==="#FFFFFF"?"inset 0 0 0 1px #ddd":"none"}}/>
+                    ))}
+                    <input type="color" value={contentBg} onChange={e=>{
+                        setContentBg(e.target.value);
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                      }}
+                      style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
+                  </div>
+                  <div style={{fontSize:9,color:UI.hint,lineHeight:1.5,marginTop:8}}>구분선을 드래그해서 위치를 이동할 수 있어요. 사진을 클릭해도 레이어가 갑자기 위로 튀지 않도록 보정했습니다.</div>
                 </div>
               )}
             </Sec>
@@ -771,13 +830,13 @@ export default function InstaDesignerPage() {
             <Sec label="배경 색상" accent={UI.accent}>
               <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                 {[CANVAS_BG,"#FFFFFF","#1C2B28","#E5F0EE","#F0EBE0","#2A1A0A"].map(hex=>(
-                  <div key={hex} onClick={()=>{setCanvasBg(hex);fabricRef.current?.setBackgroundColor(hex,()=>fabricRef.current.renderAll());}}
+                  <div key={hex} onClick={()=>{setCanvasBg(hex);fabricRef.current?.setBackgroundColor(hex,()=>{ensureFixedOrder();});}}
                     style={{width:24,height:24,borderRadius:6,background:hex,cursor:"pointer",
                             border:`2px solid ${canvasBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
                             transform:canvasBg===hex?"scale(1.12)":"scale(1)",transition:"all .15s",
                             boxShadow:hex==="#FFFFFF"?"inset 0 0 0 1px #ddd":"none"}}/>
                 ))}
-                <input type="color" value={canvasBg} onChange={e=>{setCanvasBg(e.target.value);fabricRef.current?.setBackgroundColor(e.target.value,()=>fabricRef.current.renderAll());}}
+                <input type="color" value={canvasBg} onChange={e=>{setCanvasBg(e.target.value);fabricRef.current?.setBackgroundColor(e.target.value,()=>{ensureFixedOrder();});}}
                   style={{width:24,height:24,border:"none",borderRadius:6,cursor:"pointer"}}/>
               </div>
             </Sec>
