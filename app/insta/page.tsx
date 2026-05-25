@@ -51,7 +51,12 @@ export default function InstaDesignerPage() {
   const [contentBg,   setContentBg]  = useState(CANVAS_BG);
   const [photoPct,    setPhotoPct]   = useState(60);
   const [photoZoom,   setPhotoZoom]  = useState(100);
+  const [photoOpacity,setPhotoOpacity]= useState(100);
   const [photoFit,    setPhotoFit]   = useState<FitMode>("contain"); // contain=사진 전체 보이기, cover=영역 채우기
+  const [shapeStyle,  setShapeStyle] = useState<"stroke"|"fill"|"both">("stroke");
+  const [shapeStrokeColor,setShapeStrokeColor]=useState(PC_STYLE.brand.orange);
+  const [shapeFillColor,setShapeFillColor]=useState(PC_STYLE.brand.teal2);
+  const [shapeOpacity,setShapeOpacity]=useState(100);
   // 세로 구분선 전용
   const [dividerColor,setDividerColor]=useState(PC_STYLE.brand.orange);
 
@@ -114,6 +119,12 @@ export default function InstaDesignerPage() {
   },[fabricReady]); // eslint-disable-line
 
   useEffect(()=>{ if(imageLoaded) applyFilter(); },[brightness,contrast,saturation,warmth]); // eslint-disable-line
+  useEffect(()=>{
+    if(imgRef.current){
+      imgRef.current.set("opacity", photoOpacity/100);
+      fabricRef.current?.renderAll();
+    }
+  },[photoOpacity]);
 
   function getFab():any{ return typeof window!=="undefined"?(window as any).fabric:null; }
   function getDims(r:Ratio=ratio){ return RATIOS.find(x=>x.key===r)||RATIOS[0]; }
@@ -230,11 +241,15 @@ export default function InstaDesignerPage() {
   function ensureFixedOrder(){
     const fc=fabricRef.current; if(!fc) return;
     const objs=fc.getObjects?.()||[];
-    const divider=objs.find((o:any)=>o.name==="divider");
     const logos=objs.filter((o:any)=>o.name==="logo");
-    if(divider) fc.bringToFront(divider);
     logos.forEach((o:any)=>fc.bringToFront(o));
     fc.renderAll();
+  }
+
+  function getLogoState(){
+    const logo=fabricRef.current?.getObjects?.().find((o:any)=>o.name==="logo");
+    if(!logo) return null;
+    return {left:logo.left, top:logo.top, scaleX:logo.scaleX, scaleY:logo.scaleY, angle:logo.angle};
   }
 
   // ── 이미지 스케일 ───────────────────────────────────
@@ -254,6 +269,7 @@ export default function InstaDesignerPage() {
       top:   areaTop  + (areaH - sh) / 2,
       selectable: true,
       evented: true,
+      opacity: photoOpacity/100,
     });
     img.setCoords();
   }
@@ -263,9 +279,7 @@ export default function InstaDesignerPage() {
   function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct, zoomPct:number=photoZoom){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const fc=fabricRef.current;
-
-    // 로고 보존
-    const logoObjs=keepLogo ? fc.getObjects().filter((o:any)=>o.name==="logo") : [];
+    const logoState=keepLogo!==false ? getLogoState() : null;
 
     // 클리어 후 배경 설정
     fc.clear();
@@ -277,10 +291,10 @@ export default function InstaDesignerPage() {
       fitArea(img,cw,0,photoH,fitMode,0,cw,zoomPct);
       fc.add(img);
       // 하단 크림 배경 (사진 영역 외부를 덮음)
-      fc.add(new Fab.Rect({left:0,top:photoH,width:cw,height:textH,
+      fc.add(new Fab.Rect({left:-2,top:photoH,width:cw+4,height:textH,
         fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       // 세로 초과 부분 마스킹 (사진이 photoH 아래로 삐져나오지 않도록)
-      fc.add(new Fab.Rect({left:0,top:photoH,width:cw,height:textH,
+      fc.add(new Fab.Rect({left:-2,top:photoH,width:cw+4,height:textH,
         fill:contentBg,selectable:false,evented:false,name:"layout-mask"}));
 
     } else if(tmpl==="photo-top"){
@@ -289,11 +303,11 @@ export default function InstaDesignerPage() {
       fitArea(img,cw,textH,photoH,fitMode,0,cw,zoomPct);
       fc.add(img);
       // 상단 크림 배경
-      fc.add(new Fab.Rect({left:0,top:0,width:cw,height:textH,
+      fc.add(new Fab.Rect({left:-2,top:0,width:cw+4,height:textH,
         fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       // 하단 초과 마스킹
       if(photoH+textH<ch){
-        fc.add(new Fab.Rect({left:0,top:ch,width:cw,height:ch,
+        fc.add(new Fab.Rect({left:-2,top:ch,width:cw+4,height:ch,
           fill:contentBg,selectable:false,evented:false,name:"layout-mask"}));
       }
 
@@ -310,7 +324,7 @@ export default function InstaDesignerPage() {
       fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
       fc.add(img);
       // 하단 크림 오버레이
-      fc.add(new Fab.Rect({left:0,top:ch*0.58,width:cw,height:ch*0.42,
+      fc.add(new Fab.Rect({left:-2,top:ch*0.58,width:cw+4,height:ch*0.42,
         fill:hexToRgba(contentBg,0.92),selectable:false,evented:false,name:"layout-bg"}));
       // 세로 구분선 — selectable:true 로 이동 가능
       fc.add(new Fab.Rect({left:28,top:ch*0.64,width:2.5,height:ch*0.22,
@@ -323,14 +337,14 @@ export default function InstaDesignerPage() {
       fc.add(img);
       const pad=10;
       // 사진 위에 프레임(배경색) 테두리
-      fc.add(new Fab.Rect({left:0,top:0,width:cw,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
-      fc.add(new Fab.Rect({left:0,top:ch-pad,width:cw,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      fc.add(new Fab.Rect({left:-2,top:0,width:cw+4,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      fc.add(new Fab.Rect({left:-2,top:ch-pad,width:cw+4,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       fc.add(new Fab.Rect({left:0,top:0,width:pad,height:ch,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       fc.add(new Fab.Rect({left:cw-pad,top:0,width:pad,height:ch,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
     }
 
     // 로고 심볼 복원 또는 새로 추가
-    if(showSymbol) addSymbol(cw,ch);
+    if(showSymbol) addSymbol(cw,ch,logoState);
     ensureFixedOrder();
   }
 
@@ -339,17 +353,19 @@ export default function InstaDesignerPage() {
     if(!fabricRef.current) return;
     const {w,h}=getDims();
     if(tmpl==="text-only"){
+      const logoState=getLogoState();
       fabricRef.current.clear();
       fabricRef.current.setBackgroundColor(canvasBg,()=>{});
-      if(showSymbol) addSymbol(w,h);
+      if(showSymbol) addSymbol(w,h,logoState);
       ensureFixedOrder();
     } else if(imgRef.current){
-      applyLayout(imgRef.current,tmpl,w,h,false,photoFit,photoPct,photoZoom);
+      applyLayout(imgRef.current,tmpl,w,h,true,photoFit,photoPct,photoZoom);
       ensureFixedOrder();
     } else {
+      const logoState=getLogoState();
       fabricRef.current.clear();
       fabricRef.current.setBackgroundColor(canvasBg,()=>{});
-      if(showSymbol) addSymbol(w,h);
+      if(showSymbol) addSymbol(w,h,logoState);
       ensureFixedOrder();
     }
   };
@@ -370,7 +386,7 @@ export default function InstaDesignerPage() {
         // naturalWidth/Height가 확정된 시점에 Fabric 이미지 객체 생성
         const img=new Fab.Image(el);
         const {w,h}=getDims();
-        applyLayout(img,template,w,h,false,photoFit,photoPct,photoZoom);
+        applyLayout(img,template,w,h,true,photoFit,photoPct,photoZoom);
         imgRef.current=img;
         setImageLoaded(true);
         applyFilter(img);
@@ -381,25 +397,36 @@ export default function InstaDesignerPage() {
       el.src=url;
     };
     reader.readAsDataURL(file);
-  },[fabricReady,template,ratio,photoPct,photoZoom,photoFit,showSymbol,canvasBg,contentBg,dividerColor]); // eslint-disable-line
+  },[fabricReady,template,ratio,photoPct,photoZoom,photoOpacity,photoFit,showSymbol,canvasBg,contentBg,dividerColor]); // eslint-disable-line
 
   // ── 포토클리닉 심볼 ──────────────────────────────────
-  function addSymbol(cw:number,ch:number){
+  function addSymbol(cw:number,ch:number, state?:{left:number;top:number;scaleX:number;scaleY:number;angle:number}|null){
     removeByName("logo");
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
-    const fc=fabricRef.current;
     const r1=14,r2=9,r3=4;
     const cx=cw/2, cy=ch-38;
-    fc.add(new Fab.Path(`M ${cx} ${cy-r1} A ${r1} ${r1} 0 0 0 ${cx} ${cy+r1} Z`,
-      {fill:"#E85D2C",selectable:false,evented:false,name:"logo"}));
-    fc.add(new Fab.Path(`M ${cx} ${cy-r1} A ${r1} ${r1} 0 0 1 ${cx} ${cy+r1} Z`,
-      {fill:"#155855",selectable:false,evented:false,name:"logo"}));
-    fc.add(new Fab.Path(`M ${cx} ${cy-r2} A ${r2} ${r2} 0 0 0 ${cx} ${cy+r2} Z`,
-      {fill:"#EB8F22",selectable:false,evented:false,name:"logo"}));
-    fc.add(new Fab.Path(`M ${cx} ${cy-r2} A ${r2} ${r2} 0 0 1 ${cx} ${cy+r2} Z`,
-      {fill:"#569082",selectable:false,evented:false,name:"logo"}));
-    fc.add(new Fab.Circle({left:cx,top:cy,radius:r3,fill:"rgba(255,255,255,0.95)",
-      originX:"center",originY:"center",selectable:false,evented:false,name:"logo"}));
+    const parts=[
+      new Fab.Path(`M ${0} ${-r1} A ${r1} ${r1} 0 0 0 ${0} ${r1} Z`, {fill:"#E85D2C"}),
+      new Fab.Path(`M ${0} ${-r1} A ${r1} ${r1} 0 0 1 ${0} ${r1} Z`, {fill:"#155855"}),
+      new Fab.Path(`M ${0} ${-r2} A ${r2} ${r2} 0 0 0 ${0} ${r2} Z`, {fill:"#EB8F22"}),
+      new Fab.Path(`M ${0} ${-r2} A ${r2} ${r2} 0 0 1 ${0} ${r2} Z`, {fill:"#569082"}),
+      new Fab.Circle({left:0,top:0,radius:r3,fill:"rgba(255,255,255,0.95)",originX:"center",originY:"center"})
+    ];
+    const group=new Fab.Group(parts,{
+      left:state?.left ?? cx,
+      top:state?.top ?? cy,
+      scaleX:state?.scaleX ?? 1,
+      scaleY:state?.scaleY ?? 1,
+      angle:state?.angle ?? 0,
+      originX:"center",
+      originY:"center",
+      name:"logo",
+      selectable:true,
+      evented:true,
+      hasControls:true,
+      lockScalingFlip:true
+    });
+    fabricRef.current.add(group);
   }
 
   const handleToggleSymbol=()=>{
@@ -469,18 +496,35 @@ export default function InstaDesignerPage() {
   }
 
   // ── 도형 삽입 ────────────────────────────────────────
+  function isShapeObject(o:any){
+    return ["rect","circle","triangle","line"].includes(o?.type);
+  }
+  function applyShapeStyleToObject(obj:any){
+    if(!obj) return;
+    if(obj.type==="line"){
+      obj.set({stroke:shapeStrokeColor,strokeWidth:2,opacity:shapeOpacity/100});
+      return;
+    }
+    if(shapeStyle==="stroke"){
+      obj.set({stroke:shapeStrokeColor,strokeWidth:2,fill:"transparent",opacity:shapeOpacity/100});
+    }else if(shapeStyle==="fill"){
+      obj.set({stroke:"transparent",strokeWidth:0,fill:shapeFillColor,opacity:shapeOpacity/100});
+    }else{
+      obj.set({stroke:shapeStrokeColor,strokeWidth:2,fill:shapeFillColor,opacity:shapeOpacity/100});
+    }
+  }
   function addShape(type:"rect"|"circle"|"line"|"triangle"){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const {w:cw,h:ch}=getDims();
-    const common={left:cw/2,top:ch/2,originX:"center",originY:"center",
-                  fill:"transparent",stroke:accentColor,strokeWidth:2};
+    const common={left:cw/2,top:ch/2,originX:"center",originY:"center"};
     let obj:any;
     if(type==="rect")     obj=new Fab.Rect({...common,width:120,height:80,rx:4});
     if(type==="circle")   obj=new Fab.Circle({...common,radius:55});
     if(type==="triangle") obj=new Fab.Triangle({...common,width:100,height:86});
     if(type==="line")     obj=new Fab.Line([0,0,cw*0.35,0],
-      {left:cw/2,top:ch*0.65,stroke:accentColor,strokeWidth:1.5,originX:"center",originY:"center"});
+      {left:cw/2,top:ch*0.65,originX:"center",originY:"center"});
     if(obj){
+      applyShapeStyleToObject(obj);
       fabricRef.current.add(obj);
       fabricRef.current.setActiveObject(obj);
       ensureFixedOrder();
@@ -519,6 +563,12 @@ export default function InstaDesignerPage() {
     const fc=fabricRef.current; if(!fc) return [];
     return fc.getActiveObjects?.() || (fc.getActiveObject()?[fc.getActiveObject()]:[]);
   }
+  useEffect(()=>{
+    const objs=selectedObjects().filter((o:any)=>isShapeObject(o));
+    if(!objs.length) return;
+    objs.forEach((o:any)=>applyShapeStyleToObject(o));
+    fabricRef.current?.renderAll();
+  },[shapeStyle,shapeStrokeColor,shapeFillColor,shapeOpacity]);
   function afterLayerChange(msg:string){
     fabricRef.current?.discardActiveObject();
     ensureFixedOrder();
@@ -543,6 +593,13 @@ export default function InstaDesignerPage() {
     const fc=fabricRef.current; const objs=selectedObjects(); if(!fc||!objs.length){showToast("배치할 콘텐츠를 선택해주세요");return;}
     objs.forEach((o:any)=>fc.sendToBack(o));
     afterLayerChange("맨 뒤로 배치 ✓");
+  };
+  const applyCurrentShapeStyle=()=>{
+    const objs=selectedObjects().filter((o:any)=>isShapeObject(o));
+    if(!objs.length){showToast("적용할 도형을 선택해주세요");return;}
+    objs.forEach((o:any)=>applyShapeStyleToObject(o));
+    ensureFixedOrder();
+    showToast("도형 스타일 적용 ✓");
   };
   const duplicate=()=>{
     const o=fabricRef.current?.getActiveObject();if(!o) return;
@@ -717,7 +774,7 @@ export default function InstaDesignerPage() {
                       setPhotoPct(nextPhotoPct);
                       if(imgRef.current&&fabricRef.current){
                         const{w,h}=getDims();
-                        applyLayout(imgRef.current,template,w,h,false,photoFit,nextPhotoPct,photoZoom);
+                        applyLayout(imgRef.current,template,w,h,true,photoFit,nextPhotoPct,photoZoom);
                       }
                     }}/>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:10}}>
@@ -725,7 +782,7 @@ export default function InstaDesignerPage() {
                     {[CANVAS_BG,"#FFFFFF","#F0EBE0","#E5F0EE","#F7E3D7","#1C2B28"].map(hex=>(
                       <div key={hex} onClick={()=>{
                           setContentBg(hex);
-                          if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                          if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
                         }}
                         style={{width:20,height:20,borderRadius:"50%",background:hex,cursor:"pointer",
                                 border:`2px solid ${contentBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
@@ -733,7 +790,7 @@ export default function InstaDesignerPage() {
                     ))}
                     <input type="color" value={contentBg} onChange={e=>{
                         setContentBg(e.target.value);
-                        if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                        if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
                       }}
                       style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
                   </div>
@@ -745,12 +802,12 @@ export default function InstaDesignerPage() {
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
                     <button onClick={()=>{
                         setPhotoFit("contain");
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"contain",photoPct,photoZoom);}
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,"contain",photoPct,photoZoom);}
                       }}
                       style={bS(photoFit==="contain",UI.teal)}>전체 보기</button>
                     <button onClick={()=>{
                         setPhotoFit("cover");
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,"cover",photoPct,photoZoom);}
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,"cover",photoPct,photoZoom);}
                       }}
                       style={bS(photoFit==="cover",UI.accent)}>영역 채우기</button>
                   </div>
@@ -762,8 +819,15 @@ export default function InstaDesignerPage() {
                       onChange={e=>{
                         const nextZoom=+e.target.value;
                         setPhotoZoom(nextZoom);
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,nextZoom);}
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,nextZoom);}
                       }}/>
+                  </div>
+                  <div style={{marginTop:10}}>
+                    <div style={{fontSize:10,color:UI.muted,marginBottom:5,display:"flex",justifyContent:"space-between"}}>
+                      <span>사진 opacity</span><span style={{color:UI.teal,fontWeight:700}}>{photoOpacity}%</span>
+                    </div>
+                    <input type="range" min={0} max={100} value={photoOpacity} style={{width:"100%",accentColor:UI.teal}}
+                      onChange={e=>setPhotoOpacity(+e.target.value)}/>
                   </div>
                   <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>기본값은 사진이 잘리지 않는 ‘전체 보기’이며, 확대는 최대 120%까지 가능합니다.</div>
                 </div>
@@ -810,7 +874,7 @@ export default function InstaDesignerPage() {
                     {[CANVAS_BG,"#FFFFFF","#F0EBE0","#E5F0EE","#F7E3D7","#1C2B28"].map(hex=>(
                       <div key={hex} onClick={()=>{
                           setContentBg(hex);
-                          if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                          if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
                         }}
                         style={{width:20,height:20,borderRadius:"50%",background:hex,cursor:"pointer",
                                 border:`2px solid ${contentBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
@@ -818,7 +882,7 @@ export default function InstaDesignerPage() {
                     ))}
                     <input type="color" value={contentBg} onChange={e=>{
                         setContentBg(e.target.value);
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,false,photoFit,photoPct,photoZoom);} 
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
                       }}
                       style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
                   </div>
@@ -850,6 +914,45 @@ export default function InstaDesignerPage() {
                             transform:accentColor===hex?"scale(1.2)":"scale(1)",transition:"all .15s"}}/>
                 ))}
               </div>
+            </Sec>
+
+            <Sec label="도형 스타일" accent={UI.accent}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
+                <button onClick={()=>setShapeStyle("stroke")} style={bS(shapeStyle==="stroke",UI.teal)}>테두리</button>
+                <button onClick={()=>setShapeStyle("fill")}   style={bS(shapeStyle==="fill",UI.teal)}>채우기</button>
+                <button onClick={()=>setShapeStyle("both")}   style={bS(shapeStyle==="both",UI.teal)}>둘 다</button>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:4}}>테두리 컬러</div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                  {[PC_STYLE.brand.orange,PC_STYLE.brand.teal,PC_STYLE.brand.orange2,PC_STYLE.brand.teal2,"#1C2B28","#FFFFFF"].map(hex=>(
+                    <div key={hex} onClick={()=>setShapeStrokeColor(hex)}
+                      style={{width:22,height:22,borderRadius:"50%",background:hex,cursor:"pointer",
+                              border:`2px solid ${shapeStrokeColor===hex?"#1C2B28":"rgba(0,0,0,.1)"}`,
+                              boxShadow:hex==="#FFFFFF"?"inset 0 0 0 1px #ddd":"none"}}/>
+                  ))}
+                  <input type="color" value={shapeStrokeColor} onChange={e=>setShapeStrokeColor(e.target.value)} style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:4}}>채우기 컬러</div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                  {[PC_STYLE.brand.orange,PC_STYLE.brand.teal,PC_STYLE.brand.orange2,PC_STYLE.brand.teal2,"#F0EBE0","#1C2B28"].map(hex=>(
+                    <div key={hex} onClick={()=>setShapeFillColor(hex)}
+                      style={{width:22,height:22,borderRadius:"50%",background:hex,cursor:"pointer",
+                              border:`2px solid ${shapeFillColor===hex?"#1C2B28":"rgba(0,0,0,.1)"}`}}/>
+                  ))}
+                  <input type="color" value={shapeFillColor} onChange={e=>setShapeFillColor(e.target.value)} style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:5,display:"flex",justifyContent:"space-between"}}>
+                  <span>도형 opacity</span><span style={{color:UI.teal,fontWeight:700}}>{shapeOpacity}%</span>
+                </div>
+                <input type="range" min={0} max={100} value={shapeOpacity} style={{width:"100%",accentColor:UI.teal}} onChange={e=>setShapeOpacity(+e.target.value)}/>
+              </div>
+              <button onClick={applyCurrentShapeStyle} style={{...bS(true,UI.teal),width:"100%",color:UI.teal}}>선택 도형 스타일 적용</button>
+              <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>도형을 선택한 상태에서 조정하면 바로 반영됩니다. 선택이 없으면 새로 추가되는 도형에 적용됩니다.</div>
             </Sec>
 
             <Sec label="팬톤 컬러" accent={UI.accent}>
