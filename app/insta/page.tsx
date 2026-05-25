@@ -215,18 +215,21 @@ export default function InstaDesignerPage() {
   // ── 이미지 스케일 (핵심 수정) ───────────────────────
   // clipPath 방식 대신 오프스크린 렌더링: top/left로 영역 밖 숨김
   function fillArea(img:any, cw:number, areaTop:number, areaH:number){
-    const iw=img._element?.naturalWidth  || img.getOriginalSize?.()?.width  || img.width  || 1;
-    const ih=img._element?.naturalHeight || img.getOriginalSize?.()?.height || img.height || 1;
-    // cover: 영역을 꽉 채우는 최소 스케일
-    const scale=Math.max(cw/iw, areaH/ih);
-    const sw=iw*scale, sh=ih*scale;
-    // 가로 중앙, 세로 중앙 (영역 기준)
-    const left=(cw-sw)/2;
-    const top=areaTop+(areaH-sh)/2;
+    // new Fab.Image(el) 방식: img.width/height = el.naturalWidth/Height (원본 픽셀)
+    // scaleX/Y가 1일 때 기준
+    const iw = img.width  || 1;
+    const ih = img.height || 1;
+    // cover: 지정 영역을 꽉 채우는 최소 스케일
+    const scale = Math.max(cw / iw, areaH / ih);
+    const sw = iw * scale;
+    const sh = ih * scale;
     img.set({
-      scaleX:scale, scaleY:scale,
-      left, top,
-      selectable:true, evented:true,
+      scaleX: scale,
+      scaleY: scale,
+      left:  (cw - sw) / 2,              // 가로 중앙
+      top:   areaTop + (areaH - sh) / 2, // 세로 중앙 (영역 기준)
+      selectable: true,
+      evented: true,
     });
   }
 
@@ -270,14 +273,21 @@ export default function InstaDesignerPage() {
       }
 
     } else if(tmpl==="photo-overlay"){
-      fillArea(img,cw,0,ch);
+      // cover: 캔버스 전체를 채움
+      const scale = Math.max(cw / (img.width||1), ch / (img.height||1));
+      img.set({ scaleX:scale, scaleY:scale,
+                left:(cw - img.width*scale)/2, top:(ch - img.height*scale)/2,
+                selectable:true, evented:true });
       fc.add(img);
 
     } else if(tmpl==="text-only"){
       // 사진 없이 텍스트만 — img는 추가하지 않음
 
     } else if(tmpl==="split-v"){
-      fillArea(img,cw,0,ch);
+      const scale = Math.max(cw / (img.width||1), ch / (img.height||1));
+      img.set({ scaleX:scale, scaleY:scale,
+                left:(cw - img.width*scale)/2, top:(ch - img.height*scale)/2,
+                selectable:true, evented:true });
       fc.add(img);
       // 하단 크림 오버레이
       fc.add(new Fab.Rect({left:0,top:ch*0.58,width:cw,height:ch*0.42,
@@ -288,7 +298,10 @@ export default function InstaDesignerPage() {
         hasControls:true,hasBorders:false,lockScalingX:true}));
 
     } else if(tmpl==="frame"){
-      fillArea(img,cw,0,ch);
+      const scale = Math.max(cw / (img.width||1), ch / (img.height||1));
+      img.set({ scaleX:scale, scaleY:scale,
+                left:(cw - img.width*scale)/2, top:(ch - img.height*scale)/2,
+                selectable:true, evented:true });
       fc.add(img);
       const pad=10;
       // 사진 위에 프레임(배경색) 테두리
@@ -323,30 +336,30 @@ export default function InstaDesignerPage() {
   };
 
   // ── 이미지 업로드 ────────────────────────────────────
+  // fromURL 대신 HTMLImageElement 직접 생성 → new Fab.Image(el) 방식
+  // 이렇게 해야 naturalWidth/Height가 100% 보장됨
   const loadImage=useCallback((file:File)=>{
     if(file.size>10*1024*1024){showToast("10MB 이하만 가능");return;}
     if(!fabricReady){showToast("에디터 초기화 중...");return;}
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
+
     const reader=new FileReader();
     reader.onload=e=>{
-      // URL.createObjectURL 방식으로 로드해서 naturalWidth 확실히 보장
       const url=e.target!.result as string;
-      const htmlImg=new Image();
-      htmlImg.onload=()=>{
-        Fab.Image.fromURL(url,(img:any)=>{
-          if(!img){showToast("이미지 로드 실패");return;}
-          // naturalWidth를 직접 주입 (Fabric이 읽지 못하는 경우 대비)
-          if(!img._element) (img as any)._element=htmlImg;
-          const {w,h}=getDims();
-          applyLayout(img,template,w,h);
-          imgRef.current=img;
-          setImageLoaded(true);
-          applyFilter(img);
-          fabricRef.current.renderAll();
-          showToast("이미지 업로드 완료 ✓");
-        },{crossOrigin:"anonymous"});
+      const el=new window.Image();
+      el.onload=()=>{
+        // naturalWidth/Height가 확정된 시점에 Fabric 이미지 객체 생성
+        const img=new Fab.Image(el);
+        const {w,h}=getDims();
+        applyLayout(img,template,w,h);
+        imgRef.current=img;
+        setImageLoaded(true);
+        applyFilter(img);
+        fabricRef.current.renderAll();
+        showToast("이미지 업로드 완료 ✓");
       };
-      htmlImg.src=url;
+      el.onerror=()=>showToast("이미지 로드 실패 — 다른 파일로 시도해주세요");
+      el.src=url;
     };
     reader.readAsDataURL(file);
   },[fabricReady,template,ratio,photoPct,showSymbol,canvasBg,dividerColor]); // eslint-disable-line
