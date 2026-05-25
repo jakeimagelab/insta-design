@@ -138,7 +138,15 @@ export default function InstaDesignerPage() {
     const Fab=getFab(); if(!Fab||!canvasRef.current) return;
     try{fabricRef.current?.dispose();}catch{}
     const {w,h}=getDims(r);
-    fabricRef.current=new Fab.Canvas(canvasRef.current,{width:w,height:h,backgroundColor:canvasBg,preserveObjectStacking:true});
+    fabricRef.current=new Fab.Canvas(canvasRef.current,{
+      width:w, height:h,
+      backgroundColor:canvasBg,
+      preserveObjectStacking:true,
+      // 성능 최적화
+      renderOnAddRemove: false,   // add/remove 시 자동 렌더 끔 → 수동 renderAll로 일괄 처리
+      skipOffscreen: true,        // 화면 밖 객체 스킵
+      enablePointerEvents: true,
+    });
 
     // 더블클릭 텍스트 편집
     fabricRef.current.on("mouse:dblclick",(opt:any)=>{
@@ -257,14 +265,20 @@ export default function InstaDesignerPage() {
     const Fab=getFab();
     const el=imgElRef.current || img?._element;
     if(!Fab || !el) return img;
-    return new Fab.Image(el,{objectCaching:false,noScaleCache:true});
+    return new Fab.Image(el,{noScaleCache:false});  // objectCaching 기본값(true) 사용 → 드래그 성능 향상
   }
 
   // ── 이미지 스케일 ───────────────────────────────────
   // contain: 사진 전체가 보이게 맞춤 / cover: 영역을 꽉 채움
   function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw, zoomPct:number=photoZoom){
-    const iw = img.width  || img._element?.naturalWidth  || 1;
-    const ih = img.height || img._element?.naturalHeight || 1;
+    // 원본 픽셀 크기 읽기 우선순위:
+    // 1) imgElRef (업로드된 HTMLImageElement — 가장 확실)
+    // 2) img.getElement()?.naturalWidth (Fabric 내부 element)
+    // 3) img._element?.naturalWidth (구버전 Fabric 호환)
+    // 4) img.width (Fabric 렌더 크기 — 초기엔 0일 수 있음)
+    const _el = imgElRef.current || img.getElement?.() || img._element;
+    const iw = (_el?.naturalWidth  || _el?.width  || img.width  || img._originalElement?.naturalWidth)  || 1;
+    const ih = (_el?.naturalHeight || _el?.height || img.height || img._originalElement?.naturalHeight) || 1;
     const baseScale = mode==="cover" ? Math.max(areaW / iw, areaH / ih) : Math.min(areaW / iw, areaH / ih);
     const scale = baseScale * (zoomPct/100);
     const sw = iw * scale;
@@ -281,9 +295,8 @@ export default function InstaDesignerPage() {
       top:   areaTop  + (areaH - sh) / 2,
       selectable: true,
       evented: true,
-      objectCaching: false,
-      noScaleCache: true,
-      dirty: true,
+      // objectCaching 기본값(true) 유지 → 드래그 성능 향상
+      noScaleCache: false,
       opacity: photoOpacity/100,
     });
     img.setCoords();
@@ -368,6 +381,8 @@ export default function InstaDesignerPage() {
     // 로고 심볼 복원 또는 새로 추가
     if(showSymbol) addSymbol(cw,ch,logoState);
     ensureFixedOrder();
+    // renderOnAddRemove:false이므로 명시적 renderAll
+    fabricRef.current.renderAll();
   }
 
   const handleTemplate=(tmpl:Template)=>{
@@ -405,7 +420,8 @@ export default function InstaDesignerPage() {
       const url=e.target!.result as string;
       const el=new window.Image();
       el.onload=()=>{
-        // naturalWidth/Height가 확정된 시점에 Fabric 이미지 객체 생성
+        // HTMLImageElement를 ref에 보관 → fitArea에서 naturalWidth 확실히 읽기
+        imgElRef.current = el;
         const img=new Fab.Image(el);
         const {w,h}=getDims();
         applyLayout(img,template,w,h,true,photoFit,photoPct,photoZoom);
