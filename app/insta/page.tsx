@@ -99,6 +99,7 @@ export default function InstaDesignerPage() {
   const canvasRef=useRef<HTMLCanvasElement>(null);
   const fabricRef=useRef<any>(null);
   const imgRef=useRef<any>(null);
+  const imgElRef=useRef<any>(null);
   const fileRef=useRef<HTMLInputElement>(null);
 
   const showToast=useCallback((msg:string)=>{setToast(msg);setTimeout(()=>setToast(""),2500);},[]);
@@ -252,6 +253,13 @@ export default function InstaDesignerPage() {
     return {left:logo.left, top:logo.top, scaleX:logo.scaleX, scaleY:logo.scaleY, angle:logo.angle};
   }
 
+  function makeFreshImage(img?:any){
+    const Fab=getFab();
+    const el=imgElRef.current || img?._element;
+    if(!Fab || !el) return img;
+    return new Fab.Image(el,{objectCaching:false,noScaleCache:true});
+  }
+
   // ── 이미지 스케일 ───────────────────────────────────
   // contain: 사진 전체가 보이게 맞춤 / cover: 영역을 꽉 채움
   function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw, zoomPct:number=photoZoom){
@@ -263,12 +271,19 @@ export default function InstaDesignerPage() {
     const sh = ih * scale;
     img.set({
       name: "photo",
+      width: iw,
+      height: ih,
+      cropX: 0,
+      cropY: 0,
       scaleX: scale,
       scaleY: scale,
       left:  areaLeft + (areaW - sw) / 2,
       top:   areaTop  + (areaH - sh) / 2,
       selectable: true,
       evented: true,
+      objectCaching: false,
+      noScaleCache: true,
+      dirty: true,
       opacity: photoOpacity/100,
     });
     img.setCoords();
@@ -280,6 +295,8 @@ export default function InstaDesignerPage() {
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const fc=fabricRef.current;
     const logoState=keepLogo!==false ? getLogoState() : null;
+    const freshImg = tmpl!=="text-only" ? makeFreshImage(img) : img;
+    if(freshImg) img = freshImg;
 
     // 클리어 후 배경 설정
     fc.clear();
@@ -341,6 +358,11 @@ export default function InstaDesignerPage() {
       fc.add(new Fab.Rect({left:-2,top:ch-pad,width:cw+4,height:pad,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       fc.add(new Fab.Rect({left:0,top:0,width:pad,height:ch,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
       fc.add(new Fab.Rect({left:cw-pad,top:0,width:pad,height:ch,fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+    }
+
+    if(tmpl!=="text-only" && img){
+      imgRef.current = img;
+      applyFilter(img);
     }
 
     // 로고 심볼 복원 또는 새로 추가
