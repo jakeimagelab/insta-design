@@ -74,7 +74,7 @@ export default function InstaDesignerPage() {
   const [subText,setSubText]=useState("");
   const [microText,setMicroText]=useState("");
   const [activeTab,setActiveTab]=useState<"ai"|"manual">("ai");
-  const [activeTool,setActiveTool]=useState<"layout"|"text"|"filter">("layout");
+  const [activeTool,setActiveTool]=useState<"layout"|"text"|"shape"|"filter">("layout");
 
   // ── Undo/Redo: ref로 관리해서 stale closure 완전 방지 ──
   const undoRef   = useRef<string[]>([]);
@@ -95,6 +95,10 @@ export default function InstaDesignerPage() {
   const [activePal,setActivePal]=useState(0);
   // 회전 각도 표시
   const [rotAngle,setRotAngle]=useState<number|null>(null);
+  // 선택된 텍스트 실시간 편집
+  const [selectedIsText,setSelectedIsText]=useState(false);
+  // canvas→state 동기화 중 플래그 (useEffect stale-loop 방지)
+  const syncingFromCanvas=useRef(false);
 
   const canvasRef=useRef<HTMLCanvasElement>(null);
   const fabricRef=useRef<any>(null);
@@ -125,19 +129,59 @@ export default function InstaDesignerPage() {
   const filterRafRef=useRef<number|null>(null);
   const layoutRafRef=useRef<number|null>(null);
 
-  // 필터: RAF로 묶어서 슬라이더 연속 이동 시 프레임당 1회만 applyFilter
-  const scheduleFilter=useCallback(()=>{
+  // 필터: useEffect 내에서 직접 RAF — scheduleFilter useCallback은 stale closure 문제가 있어 제거
+  useEffect(()=>{
+    if(!imageLoaded) return;
     if(filterRafRef.current!=null) cancelAnimationFrame(filterRafRef.current);
     filterRafRef.current=requestAnimationFrame(()=>{ filterRafRef.current=null; applyFilter(); });
-  },[]); // eslint-disable-line
-
-  useEffect(()=>{ if(imageLoaded) scheduleFilter(); },[brightness,contrast,saturation,warmth]); // eslint-disable-line
+  },[brightness,contrast,saturation,warmth,imageLoaded]); // eslint-disable-line
   useEffect(()=>{
     if(imgRef.current){
       imgRef.current.set("opacity", photoOpacity/100);
       fabricRef.current?.renderAll();
     }
   },[photoOpacity]);
+
+  // ── 선택된 텍스트 실시간 반영 ──────────────────────────
+  // canvas→state 동기화 중에는 skip (무한루프 방지)
+  function getSelText(){
+    const o=fabricRef.current?.getActiveObject();
+    return (o&&["i-text","textbox","text"].includes(o.type))?o:null;
+  }
+  useEffect(()=>{
+    if(syncingFromCanvas.current) return;
+    const o=getSelText(); if(!o) return;
+    o.set({fontSize}); o.setCoords(); fabricRef.current?.renderAll();
+  },[fontSize]); // eslint-disable-line
+  useEffect(()=>{
+    if(syncingFromCanvas.current) return;
+    const o=getSelText(); if(!o) return;
+    o.set({fill:textColor}); fabricRef.current?.renderAll();
+  },[textColor]); // eslint-disable-line
+  useEffect(()=>{
+    if(syncingFromCanvas.current) return;
+    const o=getSelText(); if(!o) return;
+    const fp=FONT_PAIRS[fontPair];
+    const fam=o.name?.includes("sub")||o.name?.includes("micro")
+      ?`'${fp.body}',sans-serif`:`'${fp.display}',serif,sans-serif`;
+    o.set({fontFamily:fam}); fabricRef.current?.renderAll();
+  },[fontPair]); // eslint-disable-line
+  useEffect(()=>{
+    if(syncingFromCanvas.current) return;
+    const o=getSelText(); if(!o) return;
+    o.set({textAlign,originX:textAlign==="center"?"center":"left"});
+    fabricRef.current?.renderAll();
+  },[textAlign]); // eslint-disable-line
+  useEffect(()=>{
+    if(syncingFromCanvas.current) return;
+    const o=getSelText(); if(!o) return;
+    o.set({lineHeight:lineH}); fabricRef.current?.renderAll();
+  },[lineH]); // eslint-disable-line
+  useEffect(()=>{
+    if(syncingFromCanvas.current) return;
+    const o=getSelText(); if(!o) return;
+    o.set({charSpacing:letterSp*10}); fabricRef.current?.renderAll();
+  },[letterSp]); // eslint-disable-line
 
   function getFab():any{ return typeof window!=="undefined"?(window as any).fabric:null; }
   function getDims(r:Ratio=ratio){ return RATIOS.find(x=>x.key===r)||RATIOS[0]; }
@@ -217,6 +261,33 @@ export default function InstaDesignerPage() {
       setRotAngle(Math.round(angle));
     });
     fabricRef.current.on("mouse:up",()=>{ setRotAngle(null); });
+
+    // ── 텍스트 선택 시 패널 동기화 ──
+    const syncTextFromCanvas=(obj:any)=>{
+      const isText=["i-text","textbox","text"].includes(obj?.type);
+      setSelectedIsText(isText);
+      if(!isText) return;
+      setActiveTool("text");
+      syncingFromCanvas.current=true;
+      if(obj.fontSize!=null)    setFontSize(Math.round(obj.fontSize));
+      if(obj.fill)              setTextColor(obj.fill as string);
+      if(obj.textAlign)         setTextAlign(obj.textAlign as "left"|"center"|"right");
+      if(obj.lineHeight!=null)  setLineH(obj.lineHeight);
+      if(obj.charSpacing!=null) setLetterSp(obj.charSpacing/10);
+      const fam=obj.fontFamily??"";
+      const idx=FONT_PAIRS.findIndex(fp=>fam.includes(fp.display));
+      if(idx>=0) setFontPair(idx);
+      requestAnimationFrame(()=>{ syncingFromCanvas.current=false; });
+    };
+    fabricRef.current.on("selection:created",(opt:any)=>{
+      if(opt.selected?.length===1) syncTextFromCanvas(opt.selected[0]);
+      else setSelectedIsText(false);
+    });
+    fabricRef.current.on("selection:updated",(opt:any)=>{
+      if(opt.selected?.length===1) syncTextFromCanvas(opt.selected[0]);
+      else setSelectedIsText(false);
+    });
+    fabricRef.current.on("selection:cleared",()=>setSelectedIsText(false));
   }
 
   // ── Undo ────────────────────────────────────────────
@@ -591,7 +662,7 @@ export default function InstaDesignerPage() {
 
   // ── 도형 삽입 ────────────────────────────────────────
   function isShapeObject(o:any){
-    return ["rect","circle","triangle","line"].includes(o?.type);
+    return ["rect","circle","triangle","line","path"].includes(o?.type);
   }
   function applyShapeStyleToObject(obj:any){
     if(!obj) return;
@@ -607,16 +678,26 @@ export default function InstaDesignerPage() {
       obj.set({stroke:shapeStrokeColor,strokeWidth:2,fill:shapeFillColor,opacity:shapeOpacity/100});
     }
   }
-  function addShape(type:"rect"|"circle"|"line"|"triangle"){
+  type ShapeType="rect"|"roundrect"|"circle"|"triangle"|"line"|"star"|"hexagon"|"pentagon"|"arrow"|"cross";
+  function addShape(type:ShapeType){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const {w:cw,h:ch}=getDims();
-    const common={left:cw/2,top:ch/2,originX:"center",originY:"center"};
+    const cx=cw/2, cy=ch/2;
     let obj:any;
-    if(type==="rect")     obj=new Fab.Rect({...common,width:120,height:80,rx:4});
-    if(type==="circle")   obj=new Fab.Circle({...common,radius:55});
-    if(type==="triangle") obj=new Fab.Triangle({...common,width:100,height:86});
-    if(type==="line")     obj=new Fab.Line([0,0,cw*0.35,0],
-      {left:cw/2,top:ch*0.65,originX:"center",originY:"center"});
+    if(type==="rect")      obj=new Fab.Rect({left:cx,top:cy,originX:"center",originY:"center",width:120,height:80,rx:0});
+    if(type==="roundrect") obj=new Fab.Rect({left:cx,top:cy,originX:"center",originY:"center",width:120,height:80,rx:18,ry:18});
+    if(type==="circle")    obj=new Fab.Circle({left:cx,top:cy,originX:"center",originY:"center",radius:55});
+    if(type==="triangle")  obj=new Fab.Triangle({left:cx,top:cy,originX:"center",originY:"center",width:100,height:86});
+    if(type==="line")      obj=new Fab.Line([0,0,cw*0.35,0],{left:cx,top:cy,originX:"center",originY:"center"});
+    // Path 기반 도형 (originX/Y:"center"로 중앙 배치)
+    const paths:Record<string,string>={
+      star:    "M 0,-50 L 11.76,-16.18 L 47.55,-15.45 L 19.09,6.18 L 29.39,40.45 L 0,20 L -29.39,40.45 L -19.09,6.18 L -47.55,-15.45 L -11.76,-16.18 Z",
+      hexagon: "M 43.3,-25 L 43.3,25 L 0,50 L -43.3,25 L -43.3,-25 L 0,-50 Z",
+      pentagon:"M 0,-50 L 47.55,-15.45 L 29.39,40.45 L -29.39,40.45 L -47.55,-15.45 Z",
+      arrow:   "M -50,-15 L 10,-15 L 10,-35 L 50,0 L 10,35 L 10,15 L -50,15 Z",
+      cross:   "M -15,-50 L 15,-50 L 15,-15 L 50,-15 L 50,15 L 15,15 L 15,50 L -15,50 L -15,15 L -50,15 L -50,-15 L -15,-15 Z",
+    };
+    if(paths[type]) obj=new Fab.Path(paths[type],{left:cx,top:cy,originX:"center",originY:"center"});
     if(obj){
       applyShapeStyleToObject(obj);
       fabricRef.current.add(obj);
@@ -769,12 +850,9 @@ export default function InstaDesignerPage() {
             style={{...bS(false),opacity:canRedo?1:.3,fontSize:14,padding:"3px 10px"}}>↪</button>
 
           <div style={{width:1,height:18,background:UI.border}}/>
-          <button onClick={addFreeText}              style={bS(false)}>+ 텍스트</button>
-          <button onClick={()=>addShape("rect")}     style={bS(false)}>□</button>
-          <button onClick={()=>addShape("circle")}   style={bS(false)}>○</button>
-          <button onClick={()=>addShape("triangle")} style={bS(false)}>△</button>
-          <button onClick={()=>addShape("line")}     style={bS(false)}>—</button>
-          <button onClick={duplicate}                style={bS(false)}>복제</button>
+          <button onClick={addFreeText} style={bS(false)}>+ 텍스트</button>
+          <button onClick={()=>setActiveTool("shape")} style={bS(activeTool==="shape",UI.teal)}>+ 도형</button>
+          <button onClick={duplicate}   style={bS(false)}>복제</button>
           <button onClick={rotate90}                 style={bS(false)}>↻90°</button>
           <button onClick={bringFront}               style={bS(false)}>맨앞</button>
           <button onClick={bringFwd}                 style={bS(false)}>앞</button>
@@ -804,7 +882,7 @@ export default function InstaDesignerPage() {
         {/* ── 왼쪽 패널 ── */}
         <aside style={{width:286,background:UI.panel,borderRight:`1px solid ${UI.border}`,overflowY:"auto",flexShrink:0}}>
           <div style={{display:"flex",borderBottom:`1px solid ${UI.border}`,background:UI.surface}}>
-            {([["layout","레이아웃"],["text","텍스트·AI"],["filter","필터"]] as const).map(([k,l])=>(
+            {([["layout","레이아웃"],["text","텍스트·AI"],["shape","도형"],["filter","필터"]] as const).map(([k,l])=>(
               <button key={k} onClick={()=>setActiveTool(k as typeof activeTool)}
                 style={{flex:1,height:38,border:"none",background:"transparent",
                         color:activeTool===k?UI.teal:UI.hint,fontSize:11,fontWeight:700,
@@ -1025,45 +1103,6 @@ export default function InstaDesignerPage() {
               </div>
             </Sec>
 
-            <Sec label="도형 스타일" accent={UI.accent}>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
-                <button onClick={()=>setShapeStyle("stroke")} style={bS(shapeStyle==="stroke",UI.teal)}>테두리</button>
-                <button onClick={()=>setShapeStyle("fill")}   style={bS(shapeStyle==="fill",UI.teal)}>채우기</button>
-                <button onClick={()=>setShapeStyle("both")}   style={bS(shapeStyle==="both",UI.teal)}>둘 다</button>
-              </div>
-              <div style={{marginBottom:8}}>
-                <div style={{fontSize:10,color:UI.muted,marginBottom:4}}>테두리 컬러</div>
-                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-                  {[PC_STYLE.brand.orange,PC_STYLE.brand.teal,PC_STYLE.brand.orange2,PC_STYLE.brand.teal2,"#1C2B28","#FFFFFF"].map(hex=>(
-                    <div key={hex} onClick={()=>setShapeStrokeColor(hex)}
-                      style={{width:22,height:22,borderRadius:"50%",background:hex,cursor:"pointer",
-                              border:`2px solid ${shapeStrokeColor===hex?"#1C2B28":"rgba(0,0,0,.1)"}`,
-                              boxShadow:hex==="#FFFFFF"?"inset 0 0 0 1px #ddd":"none"}}/>
-                  ))}
-                  <input type="color" value={shapeStrokeColor} onChange={e=>setShapeStrokeColor(e.target.value)} style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
-                </div>
-              </div>
-              <div style={{marginBottom:8}}>
-                <div style={{fontSize:10,color:UI.muted,marginBottom:4}}>채우기 컬러</div>
-                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-                  {[PC_STYLE.brand.orange,PC_STYLE.brand.teal,PC_STYLE.brand.orange2,PC_STYLE.brand.teal2,"#F0EBE0","#1C2B28"].map(hex=>(
-                    <div key={hex} onClick={()=>setShapeFillColor(hex)}
-                      style={{width:22,height:22,borderRadius:"50%",background:hex,cursor:"pointer",
-                              border:`2px solid ${shapeFillColor===hex?"#1C2B28":"rgba(0,0,0,.1)"}`}}/>
-                  ))}
-                  <input type="color" value={shapeFillColor} onChange={e=>setShapeFillColor(e.target.value)} style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
-                </div>
-              </div>
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:10,color:UI.muted,marginBottom:5,display:"flex",justifyContent:"space-between"}}>
-                  <span>도형 opacity</span><span style={{color:UI.teal,fontWeight:700}}>{shapeOpacity}%</span>
-                </div>
-                <input type="range" min={0} max={100} value={shapeOpacity} style={{width:"100%",accentColor:UI.teal}} onChange={e=>setShapeOpacity(+e.target.value)}/>
-              </div>
-              <button onClick={applyCurrentShapeStyle} style={{...bS(true,UI.teal),width:"100%",color:UI.teal}}>선택 도형 스타일 적용</button>
-              <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>도형을 선택한 상태에서 조정하면 바로 반영됩니다. 선택이 없으면 새로 추가되는 도형에 적용됩니다.</div>
-            </Sec>
-
             <Sec label="팬톤 컬러" accent={UI.accent}>
               <button onClick={()=>setShowPantone(v=>!v)} style={{...bS(showPantone,UI.teal),width:"100%",marginBottom:8}}>
                 {showPantone?"닫기 ▲":"팬톤 추천 ▼"}
@@ -1098,6 +1137,19 @@ export default function InstaDesignerPage() {
 
           {/* ── 텍스트·AI 탭 ── */}
           {activeTool==="text"&&<>
+            {/* 텍스트 선택 시 실시간 편집 배너 */}
+            {selectedIsText&&(
+              <div style={{background:"#EAF4F2",border:`1.5px solid ${UI.teal}`,borderRadius:9,
+                           padding:"10px 12px",marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:700,color:UI.teal,marginBottom:3}}>
+                  ✏️ 텍스트 선택됨
+                </div>
+                <div style={{fontSize:9,color:UI.muted,lineHeight:1.6}}>
+                  아래 폰트·크기·색상·정렬 설정이 즉시 반영됩니다.<br/>
+                  내용은 캔버스에서 <b>더블클릭</b>해서 편집하세요.
+                </div>
+              </div>
+            )}
             <Sec label="콘텐츠 유형" accent={UI.accent}>
               <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
                 {CONTENT_TYPES.map(ct=>(
@@ -1244,6 +1296,82 @@ export default function InstaDesignerPage() {
             </Sec>
           </>}
 
+          {/* ── 도형 탭 ── */}
+          {activeTool==="shape"&&<>
+            <Sec label="도형 추가" accent={UI.accent}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:4}}>
+                {([
+                  ["rect",     "□ 사각형"],
+                  ["roundrect","▢ 둥근사각"],
+                  ["circle",   "○ 원"],
+                  ["triangle", "△ 삼각형"],
+                  ["star",     "★ 별"],
+                  ["hexagon",  "⬡ 육각형"],
+                  ["pentagon", "⬠ 오각형"],
+                  ["arrow",    "➤ 화살표"],
+                  ["cross",    "+ 십자"],
+                  ["line",     "— 선"],
+                ] as [ShapeType,string][]).map(([key,label])=>(
+                  <button key={key} onClick={()=>addShape(key)}
+                    style={{padding:"8px 4px",border:`1.5px solid ${UI.border}`,borderRadius:9,
+                            background:UI.surface,cursor:"pointer",fontFamily:"inherit",
+                            fontSize:10,color:UI.txt,fontWeight:600,textAlign:"center"}}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div style={{fontSize:9,color:UI.hint,marginTop:4,lineHeight:1.5}}>버튼을 클릭하면 캔버스 중앙에 추가됩니다.</div>
+            </Sec>
+
+            <Sec label="도형 스타일" accent={UI.accent}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
+                <button onClick={()=>setShapeStyle("stroke")} style={bS(shapeStyle==="stroke",UI.teal)}>테두리</button>
+                <button onClick={()=>setShapeStyle("fill")}   style={bS(shapeStyle==="fill",UI.teal)}>채우기</button>
+                <button onClick={()=>setShapeStyle("both")}   style={bS(shapeStyle==="both",UI.teal)}>둘 다</button>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:4}}>테두리 컬러</div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                  {[PC_STYLE.brand.orange,PC_STYLE.brand.teal,PC_STYLE.brand.orange2,PC_STYLE.brand.teal2,"#1C2B28","#FFFFFF"].map(hex=>(
+                    <div key={hex} onClick={()=>setShapeStrokeColor(hex)}
+                      style={{width:22,height:22,borderRadius:"50%",background:hex,cursor:"pointer",
+                              border:`2px solid ${shapeStrokeColor===hex?"#1C2B28":"rgba(0,0,0,.1)"}`,
+                              boxShadow:hex==="#FFFFFF"?"inset 0 0 0 1px #ddd":"none"}}/>
+                  ))}
+                  <input type="color" value={shapeStrokeColor} onChange={e=>setShapeStrokeColor(e.target.value)} style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:4}}>채우기 컬러</div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                  {[PC_STYLE.brand.orange,PC_STYLE.brand.teal,PC_STYLE.brand.orange2,PC_STYLE.brand.teal2,"#F0EBE0","#1C2B28"].map(hex=>(
+                    <div key={hex} onClick={()=>setShapeFillColor(hex)}
+                      style={{width:22,height:22,borderRadius:"50%",background:hex,cursor:"pointer",
+                              border:`2px solid ${shapeFillColor===hex?"#1C2B28":"rgba(0,0,0,.1)"}`}}/>
+                  ))}
+                  <input type="color" value={shapeFillColor} onChange={e=>setShapeFillColor(e.target.value)} style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:10,color:UI.muted,marginBottom:5,display:"flex",justifyContent:"space-between"}}>
+                  <span>도형 opacity</span><span style={{color:UI.teal,fontWeight:700}}>{shapeOpacity}%</span>
+                </div>
+                <input type="range" min={0} max={100} value={shapeOpacity} style={{width:"100%",accentColor:UI.teal}} onChange={e=>setShapeOpacity(+e.target.value)}/>
+              </div>
+              <button onClick={applyCurrentShapeStyle} style={{...bS(true,UI.teal),width:"100%",color:UI.teal}}>선택 도형에 스타일 적용</button>
+              <div style={{fontSize:9,color:UI.hint,marginTop:6,lineHeight:1.5}}>도형을 선택한 상태에서 조정하면 즉시 반영됩니다.</div>
+            </Sec>
+
+            <Sec label="레이어 배치" accent={UI.accent}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:5}}>
+                <button onClick={bringFront} style={bS(false)}>맨앞</button>
+                <button onClick={bringFwd}   style={bS(false)}>앞</button>
+                <button onClick={sendBwd}    style={bS(false)}>뒤</button>
+                <button onClick={sendBack}   style={bS(false)}>맨뒤</button>
+              </div>
+            </Sec>
+          </>}
+
           {/* ── 필터 탭 ── */}
           {activeTool==="filter"&&<>
             <Sec label="사진 필터" accent={UI.accent}>
@@ -1283,18 +1411,21 @@ export default function InstaDesignerPage() {
         {/* ── 캔버스 ── */}
         <main style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",
                       justifyContent:"flex-start",padding:"28px 24px",overflowY:"auto",background:UI.bg}}>
-          <div style={{boxShadow:"0 6px 32px rgba(21,88,85,.14)",borderRadius:4,overflow:"hidden",position:"relative"}}>
-            <canvas ref={canvasRef}/>
-            {!fabricReady&&(
-              <div style={{position:"absolute",inset:0,background:"rgba(229,240,238,.92)",
-                           display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
-                <Spin size={32} color={UI.teal}/>
-                <div style={{fontSize:12,color:UI.muted}}>에디터 초기화 중...</div>
-              </div>
-            )}
-          </div>
-          <div style={{fontSize:10,color:UI.hint,marginTop:10,textAlign:"center"}}>
-            {cw}×{ch}px · {ratio} · 다운로드 2배 · ⌘Z 취소 / ⌘Y 다시실행
+          {/* sticky: 스크롤 내려도 캔버스가 항상 보임 */}
+          <div style={{position:"sticky",top:28,display:"flex",flexDirection:"column",alignItems:"center"}}>
+            <div style={{boxShadow:"0 6px 32px rgba(21,88,85,.14)",borderRadius:4,overflow:"hidden",position:"relative"}}>
+              <canvas ref={canvasRef}/>
+              {!fabricReady&&(
+                <div style={{position:"absolute",inset:0,background:"rgba(229,240,238,.92)",
+                             display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
+                  <Spin size={32} color={UI.teal}/>
+                  <div style={{fontSize:12,color:UI.muted}}>에디터 초기화 중...</div>
+                </div>
+              )}
+            </div>
+            <div style={{fontSize:10,color:UI.hint,marginTop:10,textAlign:"center"}}>
+              {cw}×{ch}px · {ratio} · 다운로드 2배 · ⌘Z 취소 / ⌘Y 다시실행
+            </div>
           </div>
         </main>
       </div>
