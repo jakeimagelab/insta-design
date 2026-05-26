@@ -101,6 +101,8 @@ export default function InstaDesignerPage() {
   const imgRef=useRef<any>(null);
   const imgElRef=useRef<any>(null);
   const fileRef=useRef<HTMLInputElement>(null);
+  // fitArea가 계산한 자동 중앙 위치를 기억 → 사용자 오프셋 보존에 사용
+  const lastFitPositionRef=useRef<{left:number;top:number}|null>(null);
 
   const showToast=useCallback((msg:string)=>{setToast(msg);setTimeout(()=>setToast(""),2500);},[]);
 
@@ -310,7 +312,8 @@ export default function InstaDesignerPage() {
 
   // ── 이미지 스케일 ───────────────────────────────────
   // contain: 사진 전체가 보이게 맞춤 / cover: 영역을 꽉 채움
-  function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw, zoomPct:number=photoZoom){
+  // userDeltaX/Y: 사용자가 드래그로 이동한 오프셋 (중앙 기준)
+  function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw, zoomPct:number=photoZoom, userDeltaX=0, userDeltaY=0){
     const _el = imgElRef.current || img.getElement?.() || img._element;
     // naturalWidth/Height 우선, 없으면 img.width/height (0이면 1로 방어)
     const iw = Math.max(1, _el?.naturalWidth  || _el?.width  || img.width  || img._originalElement?.naturalWidth  || 1);
@@ -323,6 +326,10 @@ export default function InstaDesignerPage() {
     const scale = baseScale * (zoomPct/100);
     const sw = iw * scale;
     const sh = ih * scale;
+    const autoLeft = areaLeft + (safeAreaW - sw) / 2;
+    const autoTop  = areaTop  + (safeAreaH - sh) / 2;
+    // 자동 중앙 위치 기록 (사용자 오프셋 보존에 사용)
+    lastFitPositionRef.current = { left: autoLeft, top: autoTop };
     img.set({
       name: "photo",
       width: iw,
@@ -331,8 +338,8 @@ export default function InstaDesignerPage() {
       cropY: 0,
       scaleX: scale,
       scaleY: scale,
-      left:  areaLeft + (safeAreaW - sw) / 2,
-      top:   areaTop  + (safeAreaH - sh) / 2,
+      left:  autoLeft + userDeltaX,
+      top:   autoTop  + userDeltaY,
       selectable: true,
       evented: true,
       objectCaching: true,
@@ -343,11 +350,20 @@ export default function InstaDesignerPage() {
   }
 
   // ── 레이아웃 적용 ────────────────────────────────────
-  // clipPath 없이 배경 rect로 사진 영역 외부를 덮는 방식
-  function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct, zoomPct:number=photoZoom){
+  // photo-bottom/photo-top: clipPath으로 사진 영역을 실제 클리핑 (overlay rect 방식 제거)
+  // keepOffset=true: 사용자가 드래그한 위치 오프셋 유지 (photoPct·zoom·contentBg 변경 시)
+  function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct, zoomPct:number=photoZoom, keepOffset?:boolean){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const fc=fabricRef.current;
     const logoState=keepLogo!==false ? getLogoState() : null;
+
+    // 캔버스 클리어 전에 사용자 이동 오프셋 저장
+    let userDeltaX=0, userDeltaY=0;
+    if(keepOffset && imgRef.current && lastFitPositionRef.current){
+      userDeltaX=(imgRef.current.left??0)-lastFitPositionRef.current.left;
+      userDeltaY=(imgRef.current.top??0)-lastFitPositionRef.current.top;
+    }
+
     // text-only가 아닐 때만 이미지 복사
     const freshImg = tmpl!=="text-only" ? makeFreshImage(img) : img;
     if(freshImg) img = freshImg;
@@ -359,40 +375,35 @@ export default function InstaDesignerPage() {
     if(tmpl==="photo-bottom"){
       const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
-      fitArea(img,cw,0,photoH,fitMode,0,cw,zoomPct);
+      fitArea(img,cw,0,photoH,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
+      // clipPath: 이미지를 사진 영역(0~photoH)으로 실제 클리핑
+      // absolutePositioned:true → 캔버스 좌표계 기준으로 고정 (이미지 이동해도 클립 영역 유지)
+      img.clipPath=new Fab.Rect({left:0,top:0,width:cw,height:photoH,absolutePositioned:true});
       fc.add(img);
-      // 하단 크림 배경 (사진 영역 외부를 덮음)
+      // 하단 크림 배경
       fc.add(new Fab.Rect({left:-2,top:photoH,width:cw+4,height:textH,
         fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
-      // 세로 초과 부분 마스킹 (사진이 photoH 아래로 삐져나오지 않도록)
-      fc.add(new Fab.Rect({left:-2,top:photoH,width:cw+4,height:textH,
-        fill:contentBg,selectable:false,evented:false,name:"layout-mask"}));
 
     } else if(tmpl==="photo-top"){
       const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
-      fitArea(img,cw,textH,photoH,fitMode,0,cw,zoomPct);
+      fitArea(img,cw,textH,photoH,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
+      // clipPath: 이미지를 사진 영역(textH~ch)으로 실제 클리핑
+      img.clipPath=new Fab.Rect({left:0,top:textH,width:cw,height:photoH,absolutePositioned:true});
       fc.add(img);
       // 상단 크림 배경
       fc.add(new Fab.Rect({left:-2,top:0,width:cw+4,height:textH,
         fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
-      // 하단 초과 마스킹
-      if(photoH+textH<ch){
-        fc.add(new Fab.Rect({left:-2,top:ch,width:cw+4,height:ch,
-          fill:contentBg,selectable:false,evented:false,name:"layout-mask"}));
-      }
 
     } else if(tmpl==="photo-overlay"){
-      // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
-      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
+      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
       fc.add(img);
 
     } else if(tmpl==="text-only"){
       // 사진 없이 텍스트만 — img는 추가하지 않음
 
     } else if(tmpl==="split-v"){
-      // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
-      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
+      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
       fc.add(img);
       // 하단 크림 오버레이
       fc.add(new Fab.Rect({left:-2,top:ch*0.58,width:cw+4,height:ch*0.42,
@@ -403,8 +414,7 @@ export default function InstaDesignerPage() {
         hasControls:true,hasBorders:false,lockScalingX:true}));
 
     } else if(tmpl==="frame"){
-      // 기본값은 contain: 비율 변경/업로드 시 사진이 잘리지 않도록 전체 보기
-      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct);
+      fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
       fc.add(img);
       const pad=10;
       // 사진 위에 프레임(배경색) 테두리
@@ -470,11 +480,10 @@ export default function InstaDesignerPage() {
           objectCaching: true,  // 드래그 성능 향상
         });
         const {w,h}=getDims();
-        applyLayout(img,template,w,h,true,photoFit,photoPct,photoZoom);
-        imgRef.current=img;
+        // keepOffset:false — 신규 업로드이므로 위치 초기화
+        applyLayout(img,template,w,h,true,photoFit,photoPct,photoZoom,false);
+        // imgRef.current 및 applyFilter는 applyLayout 내부에서 이미 처리됨
         setImageLoaded(true);
-        applyFilter(img);
-        fabricRef.current?.renderAll();
         showToast("이미지 업로드 완료 ✓");
       }).catch(()=>showToast("이미지 디코드 실패 — 다른 파일로 시도해주세요"));
     };
@@ -866,7 +875,7 @@ export default function InstaDesignerPage() {
                         if(layoutRafRef.current!=null) cancelAnimationFrame(layoutRafRef.current);
                         layoutRafRef.current=requestAnimationFrame(()=>{
                           layoutRafRef.current=null;
-                          applyLayout(imgRef.current,template,w,h,true,photoFit,nextPhotoPct,photoZoom);
+                          applyLayout(imgRef.current,template,w,h,true,photoFit,nextPhotoPct,photoZoom,true);
                         });
                       }
                     }}/>
@@ -875,7 +884,7 @@ export default function InstaDesignerPage() {
                     {[CANVAS_BG,"#FFFFFF","#F0EBE0","#E5F0EE","#F7E3D7","#1C2B28"].map(hex=>(
                       <div key={hex} onClick={()=>{
                           setContentBg(hex);
-                          if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
+                          if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom,true);}
                         }}
                         style={{width:20,height:20,borderRadius:"50%",background:hex,cursor:"pointer",
                                 border:`2px solid ${contentBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
@@ -883,7 +892,7 @@ export default function InstaDesignerPage() {
                     ))}
                     <input type="color" value={contentBg} onChange={e=>{
                         setContentBg(e.target.value);
-                        if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
+                        if((template==="photo-bottom"||template==="photo-top")&&imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom,true);}
                       }}
                       style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
                   </div>
@@ -917,7 +926,7 @@ export default function InstaDesignerPage() {
                           if(layoutRafRef.current!=null) cancelAnimationFrame(layoutRafRef.current);
                           layoutRafRef.current=requestAnimationFrame(()=>{
                             layoutRafRef.current=null;
-                            applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,nextZoom);
+                            applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,nextZoom,true);
                           });
                         }
                       }}/>
@@ -974,7 +983,7 @@ export default function InstaDesignerPage() {
                     {[CANVAS_BG,"#FFFFFF","#F0EBE0","#E5F0EE","#F7E3D7","#1C2B28"].map(hex=>(
                       <div key={hex} onClick={()=>{
                           setContentBg(hex);
-                          if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
+                          if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom,true);}
                         }}
                         style={{width:20,height:20,borderRadius:"50%",background:hex,cursor:"pointer",
                                 border:`2px solid ${contentBg===hex?UI.teal:"rgba(0,0,0,.1)"}`,
@@ -982,7 +991,7 @@ export default function InstaDesignerPage() {
                     ))}
                     <input type="color" value={contentBg} onChange={e=>{
                         setContentBg(e.target.value);
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom);} 
+                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,photoZoom,true);}
                       }}
                       style={{width:22,height:22,border:"none",borderRadius:"50%",cursor:"pointer"}}/>
                   </div>
