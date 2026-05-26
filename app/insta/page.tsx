@@ -119,7 +119,17 @@ export default function InstaDesignerPage() {
     if(fabricReady&&canvasRef.current) initFabric(ratio);
   },[fabricReady]); // eslint-disable-line
 
-  useEffect(()=>{ if(imageLoaded) applyFilter(); },[brightness,contrast,saturation,warmth]); // eslint-disable-line
+  // ── filter 디바운스 ref ──────────────────────────────
+  const filterRafRef=useRef<number|null>(null);
+  const layoutRafRef=useRef<number|null>(null);
+
+  // 필터: RAF로 묶어서 슬라이더 연속 이동 시 프레임당 1회만 applyFilter
+  const scheduleFilter=useCallback(()=>{
+    if(filterRafRef.current!=null) cancelAnimationFrame(filterRafRef.current);
+    filterRafRef.current=requestAnimationFrame(()=>{ filterRafRef.current=null; applyFilter(); });
+  },[]); // eslint-disable-line
+
+  useEffect(()=>{ if(imageLoaded) scheduleFilter(); },[brightness,contrast,saturation,warmth]); // eslint-disable-line
   useEffect(()=>{
     if(imgRef.current){
       imgRef.current.set("opacity", photoOpacity/100);
@@ -142,15 +152,31 @@ export default function InstaDesignerPage() {
       width:w, height:h,
       backgroundColor:canvasBg,
       preserveObjectStacking:true,
-      // 성능 최적화
       renderOnAddRemove: false,   // add/remove 시 자동 렌더 끔 → 수동 renderAll로 일괄 처리
       skipOffscreen: true,        // 화면 밖 객체 스킵
       enablePointerEvents: true,
+      perPixelTargetFind: false,  // true이면 픽셀 검사로 느려짐, false = bbox 기반 (빠름)
+      targetFindTolerance: 4,     // 클릭 영역 여유 4px
+      centeredScaling: false,
+      centeredRotation: true,
+      uniformScaling: false,      // shift 누를 때만 uniform
+      // 캔버스 컨텍스트 힌트
+      contextAttributes: { willReadFrequently: false, alpha: false },
     });
 
     // 더블클릭 텍스트 편집
     fabricRef.current.on("mouse:dblclick",(opt:any)=>{
       if(opt.target?.type==="i-text") opt.target.enterEditing();
+    });
+
+    // 드래그 중 RAF 스로틀링 — 과도한 renderAll 방지
+    let movingRaf:number|null=null;
+    fabricRef.current.on("object:moving",()=>{
+      if(movingRaf!=null) return; // 이전 RAF 대기 중이면 skip
+      movingRaf=requestAnimationFrame(()=>{
+        movingRaf=null;
+        fabricRef.current?.renderAll();
+      });
     });
 
     // ── 핵심: 복원 중이 아닐 때만 undo 스택 저장 ──
@@ -169,12 +195,23 @@ export default function InstaDesignerPage() {
     // ── 회전 각도 표시 + 스내핑 ──
     fabricRef.current.on("object:rotating",(opt:any)=>{
       const obj=opt.target; if(!obj) return;
-      let angle=((obj.angle%360)+360)%360;
+      // angle을 0~359 범위로 정규화
+      let angle=((obj.angle % 360) + 360) % 360;
       // 90도 스내핑 (±5도 범위)
-      const snaps=[0,90,180,270,360];
+      const snaps=[0,90,180,270];
+      let snapped=false;
       for(const s of snaps){
-        if(Math.abs(angle-s)<5){ angle=s%360; obj.set({angle}); break; }
+        if(Math.abs(angle-s)<5){
+          angle=s;
+          obj.set({angle});
+          obj.setCoords();
+          snapped=true;
+          break;
+        }
       }
+      // 359~360 → 0 처리 (270+5 이상은 0으로)
+      if(!snapped && angle>355){ angle=0; obj.set({angle}); obj.setCoords(); }
+      if(snapped) fabricRef.current?.renderAll();
       setRotAngle(Math.round(angle));
     });
     fabricRef.current.on("mouse:up",()=>{ setRotAngle(null); });
@@ -265,21 +302,24 @@ export default function InstaDesignerPage() {
     const Fab=getFab();
     const el=imgElRef.current || img?._element;
     if(!Fab || !el) return img;
-    return new Fab.Image(el,{noScaleCache:false});  // objectCaching 기본값(true) 사용 → 드래그 성능 향상
+    return new Fab.Image(el,{
+      noScaleCache: false,
+      objectCaching: true,  // 캐시 사용 → 드래그 시 GPU 재활용
+    });
   }
 
   // ── 이미지 스케일 ───────────────────────────────────
   // contain: 사진 전체가 보이게 맞춤 / cover: 영역을 꽉 채움
   function fitArea(img:any, cw:number, areaTop:number, areaH:number, mode:FitMode=photoFit, areaLeft=0, areaW=cw, zoomPct:number=photoZoom){
-    // 원본 픽셀 크기 읽기 우선순위:
-    // 1) imgElRef (업로드된 HTMLImageElement — 가장 확실)
-    // 2) img.getElement()?.naturalWidth (Fabric 내부 element)
-    // 3) img._element?.naturalWidth (구버전 Fabric 호환)
-    // 4) img.width (Fabric 렌더 크기 — 초기엔 0일 수 있음)
     const _el = imgElRef.current || img.getElement?.() || img._element;
-    const iw = (_el?.naturalWidth  || _el?.width  || img.width  || img._originalElement?.naturalWidth)  || 1;
-    const ih = (_el?.naturalHeight || _el?.height || img.height || img._originalElement?.naturalHeight) || 1;
-    const baseScale = mode==="cover" ? Math.max(areaW / iw, areaH / ih) : Math.min(areaW / iw, areaH / ih);
+    // naturalWidth/Height 우선, 없으면 img.width/height (0이면 1로 방어)
+    const iw = Math.max(1, _el?.naturalWidth  || _el?.width  || img.width  || img._originalElement?.naturalWidth  || 1);
+    const ih = Math.max(1, _el?.naturalHeight || _el?.height || img.height || img._originalElement?.naturalHeight || 1);
+    const safeAreaW = Math.max(1, areaW);
+    const safeAreaH = Math.max(1, areaH);
+    const baseScale = mode==="cover"
+      ? Math.max(safeAreaW / iw, safeAreaH / ih)
+      : Math.min(safeAreaW / iw, safeAreaH / ih);
     const scale = baseScale * (zoomPct/100);
     const sw = iw * scale;
     const sh = ih * scale;
@@ -291,11 +331,11 @@ export default function InstaDesignerPage() {
       cropY: 0,
       scaleX: scale,
       scaleY: scale,
-      left:  areaLeft + (areaW - sw) / 2,
-      top:   areaTop  + (areaH - sh) / 2,
+      left:  areaLeft + (safeAreaW - sw) / 2,
+      top:   areaTop  + (safeAreaH - sh) / 2,
       selectable: true,
       evented: true,
-      // objectCaching 기본값(true) 유지 → 드래그 성능 향상
+      objectCaching: true,
       noScaleCache: false,
       opacity: photoOpacity/100,
     });
@@ -308,6 +348,7 @@ export default function InstaDesignerPage() {
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
     const fc=fabricRef.current;
     const logoState=keepLogo!==false ? getLogoState() : null;
+    // text-only가 아닐 때만 이미지 복사
     const freshImg = tmpl!=="text-only" ? makeFreshImage(img) : img;
     if(freshImg) img = freshImg;
 
@@ -415,26 +456,32 @@ export default function InstaDesignerPage() {
     if(!fabricReady){showToast("에디터 초기화 중...");return;}
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
 
-    const reader=new FileReader();
-    reader.onload=e=>{
-      const url=e.target!.result as string;
-      const el=new window.Image();
-      el.onload=()=>{
-        // HTMLImageElement를 ref에 보관 → fitArea에서 naturalWidth 확실히 읽기
+    // ObjectURL 사용 → FileReader보다 빠르고 메모리 효율적
+    const objectUrl=URL.createObjectURL(file);
+    const el=new window.Image();
+    // crossOrigin 없이 objectURL은 동일 origin이므로 taint 없음
+    el.decoding="async"; // 비동기 디코딩으로 메인스레드 블로킹 방지
+    el.onload=()=>{
+      // decode() 완료 후 naturalWidth 보장
+      (el.decode ? el.decode() : Promise.resolve()).then(()=>{
         imgElRef.current = el;
-        const img=new Fab.Image(el);
+        const img=new Fab.Image(el,{
+          noScaleCache: false,
+          objectCaching: true,  // 드래그 성능 향상
+        });
         const {w,h}=getDims();
         applyLayout(img,template,w,h,true,photoFit,photoPct,photoZoom);
         imgRef.current=img;
         setImageLoaded(true);
         applyFilter(img);
-        fabricRef.current.renderAll();
+        fabricRef.current?.renderAll();
         showToast("이미지 업로드 완료 ✓");
-      };
-      el.onerror=()=>showToast("이미지 로드 실패 — 다른 파일로 시도해주세요");
-      el.src=url;
+      }).catch(()=>showToast("이미지 디코드 실패 — 다른 파일로 시도해주세요"));
     };
-    reader.readAsDataURL(file);
+    el.onerror=()=>showToast("이미지 로드 실패 — 다른 파일로 시도해주세요");
+    el.src=objectUrl;
+    // URL은 onload 콜백 이후에도 el이 살아있으므로 컴포넌트 언마운트 시 해제
+    // (단순 에디터 용도에서는 페이지 수명과 동일하므로 허용)
   },[fabricReady,template,ratio,photoPct,photoZoom,photoOpacity,photoFit,showSymbol,canvasBg,contentBg,dividerColor]); // eslint-disable-line
 
   // ── 포토클리닉 심볼 ──────────────────────────────────
@@ -645,7 +692,11 @@ export default function InstaDesignerPage() {
   };
   const rotate90=()=>{
     const o=fabricRef.current?.getActiveObject();if(!o) return;
-    o.set({angle:(o.angle+90)%360});ensureFixedOrder();
+    const newAngle=((o.angle+90)%360);
+    o.set({angle:newAngle});
+    o.setCoords();
+    ensureFixedOrder();
+    fabricRef.current?.renderAll();
   };
 
   // ── AI 캡션 ──────────────────────────────────────────
@@ -812,7 +863,11 @@ export default function InstaDesignerPage() {
                       setPhotoPct(nextPhotoPct);
                       if(imgRef.current&&fabricRef.current){
                         const{w,h}=getDims();
-                        applyLayout(imgRef.current,template,w,h,true,photoFit,nextPhotoPct,photoZoom);
+                        if(layoutRafRef.current!=null) cancelAnimationFrame(layoutRafRef.current);
+                        layoutRafRef.current=requestAnimationFrame(()=>{
+                          layoutRafRef.current=null;
+                          applyLayout(imgRef.current,template,w,h,true,photoFit,nextPhotoPct,photoZoom);
+                        });
                       }
                     }}/>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:10}}>
@@ -857,7 +912,14 @@ export default function InstaDesignerPage() {
                       onChange={e=>{
                         const nextZoom=+e.target.value;
                         setPhotoZoom(nextZoom);
-                        if(imgRef.current&&fabricRef.current){const{w,h}=getDims();applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,nextZoom);}
+                        if(imgRef.current&&fabricRef.current){
+                          const{w,h}=getDims();
+                          if(layoutRafRef.current!=null) cancelAnimationFrame(layoutRafRef.current);
+                          layoutRafRef.current=requestAnimationFrame(()=>{
+                            layoutRafRef.current=null;
+                            applyLayout(imgRef.current,template,w,h,true,photoFit,photoPct,nextZoom);
+                          });
+                        }
                       }}/>
                   </div>
                   <div style={{marginTop:10}}>
