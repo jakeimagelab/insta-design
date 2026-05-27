@@ -65,7 +65,12 @@ export async function POST(req: NextRequest) {
       }),
     });
 
-    if (!res.ok) throw new Error(`Claude API ${res.status}`);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      const errMsg = errBody?.error?.message || JSON.stringify(errBody);
+      console.error(`Claude API ${res.status}: ${errMsg}`);
+      return NextResponse.json({ ok: true, mock: true, ...getMock(contentType, dept) });
+    }
     const data = await res.json();
     const txt  = (data.content || []).map((b: any) => b.text || "").join("");
     const s = txt.indexOf("{"), e = txt.lastIndexOf("}");
@@ -73,7 +78,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ...parsed });
 
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ ok: true, mock: true, ...getMock("portfolio", "") });
   }
 }
 
