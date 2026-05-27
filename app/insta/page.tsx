@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { PANTONE_PALETTES, FONT_PAIRS, PC_STYLE } from "@/lib/photoclinic-style";
 
 type Ratio       = "1:1"|"4:5"|"9:16";
@@ -75,6 +75,50 @@ export default function InstaDesignerPage() {
   const [microText,setMicroText]=useState("");
   const [activeTab,setActiveTab]=useState<"ai"|"manual">("ai");
   const [activeTool,setActiveTool]=useState<"layout"|"text"|"shape"|"filter">("layout");
+
+  // ── AI 디자인 생성 ───────────────────────────────────
+  const [aiDesignPrompt,setAiDesignPrompt]=useState("");
+  const [aiDesigning,setAiDesigning]=useState(false);
+  const [aiRationale,setAiRationale]=useState("");
+
+  // ── 피드 그리드 미리보기 ─────────────────────────────
+  const [showFeedGrid,setShowFeedGrid]=useState(false);
+  const [feedSlots,setFeedSlots]=useState<(string|null)[]>(Array(9).fill(null));
+  const [feedCurrentSlot,setFeedCurrentSlot]=useState(4); // 기본 중앙 슬롯
+
+  // ── 캐러셀 ───────────────────────────────────────────
+  type CarouselSlide={id:number;thumb:string;hires:string;label:string};
+  const [carouselSlides,setCarouselSlides]=useState<CarouselSlide[]>([]);
+  const [showCarousel,setShowCarousel]=useState(false);
+  const slideIdRef=useRef(0);
+
+  // ── 콘텐츠 아이디어 AI ───────────────────────────────
+  type ContentIdea={day:string;type:string;emoji:string;title:string;hook:string;caption:string;hashtags:string;designHint:string};
+  const [showIdeas,setShowIdeas]=useState(false);
+  const [ideaDept,setIdeaDept]=useState("");
+  const [ideaStyle,setIdeaStyle]=useState("따뜻·감성");
+  const [ideaCount,setIdeaCount]=useState(5);
+  const [ideas,setIdeas]=useState<ContentIdea[]>([]);
+  const [ideaLoading,setIdeaLoading]=useState(false);
+  const [ideaMock,setIdeaMock]=useState(false);
+
+  // ── 브랜드 키트 ──────────────────────────────────────
+  type BrandKit={
+    id:string; name:string; createdAt:number;
+    // 컬러
+    canvasBg:string; contentBg:string; textColor:string; subColor:string; accentColor:string; dividerColor:string;
+    // 폰트·타이포
+    fontPair:number; fontSize:number; subFontSize:number; lineH:number; letterSp:number; textAlign:"left"|"center"|"right";
+    // 레이아웃
+    template:Template; ratio:Ratio; photoFit:FitMode; photoPct:number; photoZoom:number;
+  };
+  const BRAND_KIT_KEY="pc_brand_kits_v1";
+  const loadKitsFromStorage=():BrandKit[]=>{
+    try{ return JSON.parse(localStorage.getItem(BRAND_KIT_KEY)||"[]"); }catch{ return []; }
+  };
+  const [brandKits,setBrandKits]=useState<BrandKit[]>(()=>typeof window!=="undefined"?loadKitsFromStorage():[]);
+  const [showBrandKit,setShowBrandKit]=useState(false);
+  const [kitNameInput,setKitNameInput]=useState("");
 
   // ── Undo/Redo: ref로 관리해서 stale closure 완전 방지 ──
   const undoRef   = useRef<string[]>([]);
@@ -828,6 +872,271 @@ export default function InstaDesignerPage() {
     }
   };
 
+  // ── 콘텐츠 아이디어 함수 ─────────────────────────────
+  const generateIdeas=async()=>{
+    setIdeaLoading(true); setIdeas([]);
+    try{
+      const res=await fetch("/api/ideas",{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({dept:ideaDept,style:ideaStyle,count:ideaCount}),
+      });
+      const data=await res.json();
+      if(!data.ok) throw new Error(data.error||"API 오류");
+      setIdeas(data.ideas||[]);
+      setIdeaMock(!!data.mock);
+    }catch(e:any){
+      showToast("아이디어 생성 실패: "+e.message);
+    }finally{
+      setIdeaLoading(false);
+    }
+  };
+
+  // 아이디어 카드에서 AI 디자인으로 바로 연결
+  const useIdeaForDesign=(idea:ContentIdea)=>{
+    setAiDesignPrompt(`${ideaDept||"병원"} ${idea.type} 포스트, ${idea.designHint}`);
+    setMainText(idea.hook);
+    setSubText(idea.title);
+    setActiveTab("manual");
+    setActiveTool("layout");
+    setShowIdeas(false);
+    showToast("아이디어를 디자인 프롬프트에 적용했습니다 ✓");
+  };
+
+  // ── 브랜드 키트 함수들 ───────────────────────────────
+  const saveKit=()=>{
+    const name=kitNameInput.trim();
+    if(!name){showToast("병원 이름을 입력하세요");return;}
+    const kit:BrandKit={
+      id:Date.now().toString(), name, createdAt:Date.now(),
+      canvasBg, contentBg, textColor, subColor, accentColor, dividerColor,
+      fontPair, fontSize, subFontSize, lineH, letterSp, textAlign,
+      template, ratio, photoFit, photoPct, photoZoom,
+    };
+    const updated=[kit,...brandKits];
+    setBrandKits(updated);
+    localStorage.setItem(BRAND_KIT_KEY,JSON.stringify(updated));
+    setKitNameInput("");
+    showToast(`"${name}" 저장 완료 ✓`);
+  };
+
+  const applyKit=(kit:BrandKit)=>{
+    setCanvasBg(kit.canvasBg);   setContentBg(kit.contentBg);
+    setTextColor(kit.textColor); setSubColor(kit.subColor);
+    setAccentColor(kit.accentColor); setDividerColor(kit.dividerColor);
+    setFontPair(kit.fontPair);   setFontSize(kit.fontSize);
+    setSubFontSize(kit.subFontSize); setLineH(kit.lineH);
+    setLetterSp(kit.letterSp);   setTextAlign(kit.textAlign);
+    setTemplate(kit.template);   setPhotoFit(kit.photoFit);
+    setPhotoPct(kit.photoPct);   setPhotoZoom(kit.photoZoom);
+    // 비율 + 캔버스 크기
+    if(kit.ratio!==ratio){
+      setRatio(kit.ratio);
+      const {w,h}=getDims(kit.ratio);
+      fabricRef.current?.setWidth(w);
+      fabricRef.current?.setHeight(h);
+    }
+    // 캔버스 배경 즉시 반영
+    if(fabricRef.current){
+      fabricRef.current.setBackgroundColor(kit.canvasBg,()=>{});
+      const {w,h}=getDims(kit.ratio||ratio);
+      if(imgRef.current){
+        applyLayout(imgRef.current,kit.template,w,h,true,kit.photoFit,kit.photoPct,kit.photoZoom,false);
+      } else {
+        fabricRef.current.renderAll();
+      }
+    }
+    showToast(`"${kit.name}" 적용 완료 ✓`);
+    setShowBrandKit(false);
+  };
+
+  const deleteKit=(id:string)=>{
+    const updated=brandKits.filter(k=>k.id!==id);
+    setBrandKits(updated);
+    localStorage.setItem(BRAND_KIT_KEY,JSON.stringify(updated));
+  };
+
+  const exportKits=()=>{
+    const json=JSON.stringify(brandKits,null,2);
+    const a=document.createElement("a");
+    a.href="data:application/json;charset=utf-8,"+encodeURIComponent(json);
+    a.download=`photoclinic_brandkits_${Date.now()}.json`;
+    a.click();
+  };
+
+  const importKits=(file:File)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      try{
+        const parsed:BrandKit[]=JSON.parse(e.target?.result as string);
+        const merged=[...parsed,...brandKits].filter((k,i,arr)=>arr.findIndex(x=>x.id===k.id)===i);
+        setBrandKits(merged);
+        localStorage.setItem(BRAND_KIT_KEY,JSON.stringify(merged));
+        showToast(`${parsed.length}개 키트 가져오기 완료 ✓`);
+      }catch{ showToast("파일 형식이 올바르지 않습니다"); }
+    };
+    reader.readAsText(file);
+  };
+
+  // ── 캐러셀 함수들 ────────────────────────────────────
+  const addCarouselSlide=()=>{
+    if(!fabricRef.current){showToast("캔버스 준비 안 됨");return;}
+    fabricRef.current.discardActiveObject();
+    ensureFixedOrder();
+    const hires=fabricRef.current.toDataURL({format:"jpeg",quality:0.95,multiplier:2});
+    const thumb=fabricRef.current.toDataURL({format:"jpeg",quality:0.7,multiplier:0.5});
+    const id=++slideIdRef.current;
+    const label=`슬라이드 ${carouselSlides.length+1}`;
+    setCarouselSlides(prev=>[...prev,{id,thumb,hires,label}]);
+    showToast(`슬라이드 ${carouselSlides.length+1} 추가됨 ✓`);
+  };
+
+  const removeCarouselSlide=(id:number)=>{
+    setCarouselSlides(prev=>prev.filter(s=>s.id!==id));
+  };
+
+  const moveCarouselSlide=(id:number,dir:-1|1)=>{
+    setCarouselSlides(prev=>{
+      const idx=prev.findIndex(s=>s.id===id);
+      if(idx<0) return prev;
+      const next=[...prev];
+      const target=idx+dir;
+      if(target<0||target>=next.length) return prev;
+      [next[idx],next[target]]=[next[target],next[idx]];
+      return next;
+    });
+  };
+
+  const updateSlide=(id:number)=>{
+    if(!fabricRef.current){showToast("캔버스 준비 안 됨");return;}
+    fabricRef.current.discardActiveObject();
+    ensureFixedOrder();
+    const hires=fabricRef.current.toDataURL({format:"jpeg",quality:0.95,multiplier:2});
+    const thumb=fabricRef.current.toDataURL({format:"jpeg",quality:0.7,multiplier:0.5});
+    setCarouselSlides(prev=>prev.map(s=>s.id===id?{...s,hires,thumb}:s));
+    showToast("슬라이드 업데이트 ✓");
+  };
+
+  const downloadAllSlides=async()=>{
+    if(carouselSlides.length===0){showToast("슬라이드가 없습니다");return;}
+    showToast(`${carouselSlides.length}장 다운로드 중...`);
+    for(let i=0;i<carouselSlides.length;i++){
+      await new Promise<void>(resolve=>{
+        setTimeout(()=>{
+          const a=document.createElement("a");
+          a.href=carouselSlides[i].hires;
+          a.download=`photoclinic_carousel_${String(i+1).padStart(2,"0")}_${ratio.replace(":","x")}.jpg`;
+          a.click();
+          resolve();
+        },i*400); // 브라우저 다운로드 간 간격
+      });
+    }
+    setTimeout(()=>showToast("전체 다운로드 완료 ✓"),carouselSlides.length*400+200);
+  };
+
+  // ── 피드 그리드 미리보기 ─────────────────────────────
+  const openFeedGrid=()=>{
+    if(!fabricRef.current){showToast("캔버스 준비 안 됨");return;}
+    fabricRef.current.discardActiveObject();
+    ensureFixedOrder();
+    const url=fabricRef.current.toDataURL({format:"jpeg",quality:0.85,multiplier:1});
+    setFeedSlots(prev=>{
+      const next=[...prev];
+      next[feedCurrentSlot]=url;
+      return next;
+    });
+    setShowFeedGrid(true);
+  };
+
+  const placeInSlot=(idx:number)=>{
+    if(!fabricRef.current) return;
+    fabricRef.current.discardActiveObject();
+    ensureFixedOrder();
+    const url=fabricRef.current.toDataURL({format:"jpeg",quality:0.85,multiplier:1});
+    setFeedSlots(prev=>{const n=[...prev];n[idx]=url;return n;});
+    setFeedCurrentSlot(idx);
+  };
+
+  const clearSlot=(idx:number,e:React.MouseEvent)=>{
+    e.stopPropagation();
+    setFeedSlots(prev=>{const n=[...prev];n[idx]=null;return n;});
+    if(feedCurrentSlot===idx) setFeedCurrentSlot(4);
+  };
+
+  // ── AI 디자인 생성 함수 ──────────────────────────────
+  const generateAiDesign=async()=>{
+    if(!aiDesignPrompt.trim()){showToast("디자인 설명을 입력하세요");return;}
+    setAiDesigning(true); setAiRationale("");
+    try{
+      const res=await fetch("/api/design",{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({prompt:aiDesignPrompt,haPhoto:imageLoaded}),
+      });
+      const data=await res.json();
+      if(!data.ok) throw new Error(data.error||"API 오류");
+
+      // 1. 비율 변경
+      if(data.ratio && data.ratio!==ratio){
+        setRatio(data.ratio);
+        const {w,h}=getDims(data.ratio);
+        if(fabricRef.current){
+          fabricRef.current.setWidth(w);
+          fabricRef.current.setHeight(h);
+        }
+      }
+      // 2. 상태 일괄 적용
+      if(data.template)    setTemplate(data.template);
+      if(data.canvasBg)    setCanvasBg(data.canvasBg);
+      if(data.contentBg)   setContentBg(data.contentBg);
+      if(data.textColor)   setTextColor(data.textColor);
+      if(data.subColor)    setSubColor(data.subColor);
+      if(data.accentColor) setAccentColor(data.accentColor);
+      if(data.fontPairIdx!=null) setFontPair(data.fontPairIdx);
+      if(data.fontSize)    setFontSize(data.fontSize);
+      if(data.subFontSize) setSubFontSize(data.subFontSize);
+      if(data.lineH)       setLineH(data.lineH);
+      if(data.letterSp!=null) setLetterSp(data.letterSp);
+      if(data.textAlign)   setTextAlign(data.textAlign);
+      if(data.photoFit)    setPhotoFit(data.photoFit);
+      if(data.photoPct)    setPhotoPct(data.photoPct);
+      if(data.photoZoom)   setPhotoZoom(data.photoZoom);
+      if(data.mainText)    setMainText(data.mainText);
+      if(data.subText)     setSubText(data.subText);
+      if(data.microText)   setMicroText(data.microText);
+      if(data.rationale)   setAiRationale(data.rationale);
+
+      // 3. 레이아웃 재적용 (상태 변경은 비동기이므로 직접 값 사용)
+      const {w,h}=getDims(data.ratio||ratio);
+      if(fabricRef.current){
+        fabricRef.current.setBackgroundColor(data.canvasBg||canvasBg,()=>{});
+        if(imgRef.current){
+          // 임시 상태로 직접 applyLayout 호출
+          const savedFit=photoFit; const savedPct=photoPct; const savedZoom=photoZoom;
+          if(data.photoFit)  setPhotoFit(data.photoFit);
+          if(data.photoPct)  setPhotoPct(data.photoPct);
+          if(data.photoZoom) setPhotoZoom(data.photoZoom);
+          applyLayout(imgRef.current,data.template||template,w,h,true,
+            data.photoFit||savedFit, data.photoPct||savedPct, data.photoZoom||savedZoom, false);
+        } else {
+          // 사진 없으면 배경 컬러만 업데이트
+          fabricRef.current.setBackgroundColor(data.canvasBg||canvasBg,()=>{
+            fabricRef.current?.renderAll();
+          });
+          if(showSymbol){const lo=getLogoState();removeByName("logo");addSymbol(w,h,lo);}
+          ensureFixedOrder();
+        }
+      }
+      // 4. 텍스트 자동 적용 (텍스트 탭으로 전환)
+      if(data.mainText||data.subText) setActiveTool("text");
+      showToast(data.mock?"AI 디자인 적용 완료 (데모)":"AI 디자인 적용 완료 ✓");
+    }catch(e:any){
+      showToast("AI 디자인 생성 실패: "+e.message);
+    }finally{
+      setAiDesigning(false);
+    }
+  };
+
   const {w:cw,h:ch}=getDims();
   const iS:React.CSSProperties={width:"100%",border:`1px solid ${UI.border}`,borderRadius:7,
     padding:"7px 10px",fontSize:12,fontFamily:"inherit",background:UI.surface,color:UI.txt,outline:"none"};
@@ -877,6 +1186,31 @@ export default function InstaDesignerPage() {
           <div style={{width:1,height:18,background:UI.border}}/>
           <button onClick={handleToggleSymbol} style={bS(showSymbol,UI.teal)}>심볼{showSymbol?" ✓":""}</button>
           <div style={{width:1,height:18,background:UI.border}}/>
+          {/* 콘텐츠 아이디어 AI 버튼 */}
+          <button onClick={()=>setShowIdeas(true)} style={bS(false)}>💡 아이디어</button>
+          {/* 브랜드 키트 버튼 */}
+          <button onClick={()=>setShowBrandKit(true)}
+            style={{...bS(brandKits.length>0,UI.teal),position:"relative",paddingRight:brandKits.length>0?22:10}}>
+            🎨 브랜드키트
+            {brandKits.length>0&&(
+              <span style={{position:"absolute",top:-4,right:-4,background:UI.teal,color:"#fff",
+                            fontSize:9,fontWeight:800,borderRadius:10,padding:"1px 5px",minWidth:16,textAlign:"center"}}>
+                {brandKits.length}
+              </span>
+            )}
+          </button>
+          {/* 캐러셀 버튼 — 슬라이드 수 배지 표시 */}
+          <button onClick={()=>setShowCarousel(true)}
+            style={{...bS(carouselSlides.length>0,UI.teal),position:"relative",paddingRight:carouselSlides.length>0?22:10}}>
+            🎞 캐러셀
+            {carouselSlides.length>0&&(
+              <span style={{position:"absolute",top:-4,right:-4,background:UI.accent,color:"#fff",
+                            fontSize:9,fontWeight:800,borderRadius:10,padding:"1px 5px",minWidth:16,textAlign:"center"}}>
+                {carouselSlides.length}
+              </span>
+            )}
+          </button>
+          <div style={{width:1,height:18,background:UI.border}}/>
           <button onClick={()=>download("png")}  style={{...bS(true,UI.teal),color:UI.teal}}>PNG↓</button>
           <button onClick={()=>download("jpeg")} style={bS(false)}>JPG↓</button>
         </div>
@@ -912,6 +1246,45 @@ export default function InstaDesignerPage() {
 
           {/* ── 레이아웃 탭 ── */}
           {activeTool==="layout"&&<>
+
+            {/* AI 디자인 생성 */}
+            <div style={{background:`linear-gradient(135deg,${UI.teal}18,${UI.accent}12)`,
+                         border:`1.5px solid ${UI.teal}40`,borderRadius:12,padding:"14px 14px 12px",marginBottom:16}}>
+              <div style={{fontSize:10,fontWeight:800,color:UI.teal,letterSpacing:".08em",
+                           textTransform:"uppercase",marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
+                <span style={{fontSize:14}}>✦</span> AI 디자인 생성
+              </div>
+              <textarea
+                value={aiDesignPrompt}
+                onChange={e=>setAiDesignPrompt(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))generateAiDesign();}}
+                placeholder={"예: 피부과 병원, 고급스럽고 따뜻한 느낌\n또는: 치과 포트폴리오, 쿨하고 클린한 스타일"}
+                rows={2}
+                style={{width:"100%",border:`1px solid ${UI.teal}50`,borderRadius:8,padding:"8px 10px",
+                        fontSize:11,fontFamily:"inherit",background:"rgba(255,255,255,0.7)",
+                        color:UI.txt,outline:"none",resize:"none",lineHeight:1.5,
+                        boxSizing:"border-box",marginBottom:8}}/>
+              <button
+                onClick={generateAiDesign}
+                disabled={aiDesigning||!aiDesignPrompt.trim()}
+                style={{width:"100%",padding:"9px",background:aiDesigning?"#9BB5B0":UI.teal,
+                        color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:700,
+                        cursor:aiDesigning||!aiDesignPrompt.trim()?"not-allowed":"pointer",
+                        fontFamily:"inherit",transition:"background .2s",letterSpacing:".03em"}}>
+                {aiDesigning?"✦ 디자인 생성 중...":"✦ AI 디자인 적용"}
+              </button>
+              {aiRationale&&(
+                <div style={{marginTop:8,fontSize:10,color:UI.muted,lineHeight:1.5,
+                             background:"rgba(255,255,255,0.6)",borderRadius:6,padding:"7px 9px",
+                             borderLeft:`3px solid ${UI.teal}`}}>
+                  {aiRationale}
+                </div>
+              )}
+              <div style={{fontSize:9,color:UI.hint,marginTop:6,textAlign:"center"}}>
+                ⌘Enter로 바로 생성 · 템플릿·컬러·폰트·텍스트 일괄 적용
+              </div>
+            </div>
+
             <Sec label="사진 업로드" accent={UI.accent}>
               <div onClick={()=>fileRef.current?.click()}
                 onDragOver={e=>e.preventDefault()}
@@ -1472,6 +1845,17 @@ export default function InstaDesignerPage() {
                   📋 복사
                 </button>
               </div>
+              {/* 피드 미리보기 버튼 */}
+              <button
+                onClick={openFeedGrid}
+                style={{display:"flex",alignItems:"center",gap:6,padding:"8px 18px",
+                        background:"transparent",color:UI.teal,border:`1.5px solid ${UI.teal}40`,
+                        borderRadius:10,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                        transition:"all .15s"}}
+                onMouseOver={e=>{e.currentTarget.style.background=`${UI.teal}12`;}}
+                onMouseOut={e=>{e.currentTarget.style.background="transparent";}}>
+                ⊞ 피드 그리드 미리보기
+              </button>
               <div style={{fontSize:10,color:UI.hint,textAlign:"center"}}>
                 {cw}×{ch}px ({cw*2}×{ch*2} 2배) · ⌘Z 취소 / ⌘Y 다시실행
               </div>
@@ -1479,6 +1863,420 @@ export default function InstaDesignerPage() {
           </div>
         </main>
       </div>
+
+      {/* ── 피드 그리드 미리보기 모달 ── */}
+      {showFeedGrid&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:500,
+                     display:"flex",alignItems:"center",justifyContent:"center"}}
+             onClick={()=>setShowFeedGrid(false)}>
+          <div style={{background:"#fff",borderRadius:18,padding:"28px 28px 24px",
+                       maxWidth:520,width:"92vw",boxShadow:"0 24px 80px rgba(0,0,0,.35)"}}
+               onClick={e=>e.stopPropagation()}>
+            {/* 헤더 */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:UI.txt}}>피드 그리드 미리보기</div>
+                <div style={{fontSize:11,color:UI.muted,marginTop:2}}>슬롯을 클릭하면 현재 디자인을 배치합니다</div>
+              </div>
+              <button onClick={()=>setShowFeedGrid(false)}
+                style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:UI.muted,padding:"4px 8px"}}>✕</button>
+            </div>
+
+            {/* 인스타 UI 흉내 — 프로필 영역 */}
+            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16,paddingBottom:14,borderBottom:`1px solid ${UI.border}`}}>
+              <div style={{width:52,height:52,borderRadius:"50%",background:`linear-gradient(135deg,${UI.accent},${UI.teal})`,
+                           display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>🏥</div>
+              <div>
+                <div style={{fontWeight:800,fontSize:13,color:UI.txt}}>@photoclinic_kr</div>
+                <div style={{fontSize:11,color:UI.muted}}>병원 브랜딩 전문 스튜디오</div>
+              </div>
+            </div>
+
+            {/* 3×3 그리드 */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:3}}>
+              {feedSlots.map((slot,idx)=>(
+                <div key={idx}
+                  onClick={()=>placeInSlot(idx)}
+                  style={{aspectRatio:"1",position:"relative",cursor:"pointer",
+                          border:`2.5px solid ${feedCurrentSlot===idx?UI.accent:"transparent"}`,
+                          borderRadius:2,overflow:"hidden",background:UI.bg,
+                          transition:"border-color .15s"}}>
+                  {slot
+                    ? <img src={slot} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                    : <div style={{width:"100%",height:"100%",display:"flex",flexDirection:"column",
+                                   alignItems:"center",justifyContent:"center",gap:4}}>
+                        <div style={{fontSize:20,opacity:.25}}>+</div>
+                        <div style={{fontSize:9,color:UI.hint,opacity:.6}}>클릭해서 배치</div>
+                      </div>
+                  }
+                  {/* 현재 슬롯 배지 */}
+                  {feedCurrentSlot===idx&&(
+                    <div style={{position:"absolute",top:4,left:4,background:UI.accent,color:"#fff",
+                                 fontSize:9,fontWeight:800,padding:"2px 5px",borderRadius:4}}>현재</div>
+                  )}
+                  {/* 슬롯 삭제 버튼 */}
+                  {slot&&(
+                    <button onClick={e=>clearSlot(idx,e)}
+                      style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,.55)",
+                              border:"none",borderRadius:"50%",width:18,height:18,
+                              color:"#fff",fontSize:10,cursor:"pointer",lineHeight:"18px",padding:0}}>
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* 안내 */}
+            <div style={{marginTop:14,fontSize:10,color:UI.hint,textAlign:"center",lineHeight:1.6}}>
+              슬롯 클릭 → 현재 디자인 배치 · ✕ → 슬롯 초기화<br/>
+              디자인을 수정하고 다시 열면 현재 슬롯에 업데이트됩니다
+            </div>
+
+            {/* 닫기 */}
+            <button onClick={()=>setShowFeedGrid(false)}
+              style={{width:"100%",marginTop:14,padding:"10px",background:UI.teal,color:"#fff",
+                      border:"none",borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              닫기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── 콘텐츠 아이디어 AI 모달 ── */}
+      {showIdeas&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:500,
+                     display:"flex",alignItems:"center",justifyContent:"center"}}
+             onClick={()=>setShowIdeas(false)}>
+          <div style={{background:"#fff",borderRadius:18,padding:"28px",maxWidth:640,width:"96vw",
+                       maxHeight:"90vh",display:"flex",flexDirection:"column",
+                       boxShadow:"0 24px 80px rgba(0,0,0,.35)"}}
+               onClick={e=>e.stopPropagation()}>
+
+            {/* 헤더 */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:UI.txt}}>💡 콘텐츠 아이디어 AI</div>
+                <div style={{fontSize:11,color:UI.muted,marginTop:2}}>병원 정보 입력 → 주간 포스트 플랜 생성</div>
+              </div>
+              <button onClick={()=>setShowIdeas(false)}
+                style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:UI.muted}}>✕</button>
+            </div>
+
+            {/* 입력 폼 */}
+            <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+              <input value={ideaDept} onChange={e=>setIdeaDept(e.target.value)}
+                placeholder="진료과 (예: 피부과, 치과)"
+                style={{flex:2,minWidth:130,border:`1px solid ${UI.border}`,borderRadius:8,padding:"8px 10px",
+                        fontSize:12,fontFamily:"inherit",background:"#fff",color:UI.txt,outline:"none"}}/>
+              <select value={ideaStyle} onChange={e=>setIdeaStyle(e.target.value)}
+                style={{flex:1,minWidth:110,border:`1px solid ${UI.border}`,borderRadius:8,padding:"8px 8px",
+                        fontSize:12,fontFamily:"inherit",background:"#fff",color:UI.txt,outline:"none"}}>
+                {["따뜻·감성","다크·고급","모던·절제","클린·밝음"].map(t=>(
+                  <option key={t}>{t}</option>
+                ))}
+              </select>
+              <select value={ideaCount} onChange={e=>setIdeaCount(Number(e.target.value))}
+                style={{width:80,border:`1px solid ${UI.border}`,borderRadius:8,padding:"8px 8px",
+                        fontSize:12,fontFamily:"inherit",background:"#fff",color:UI.txt,outline:"none"}}>
+                {[3,5,7].map(n=><option key={n} value={n}>{n}개</option>)}
+              </select>
+              <button onClick={generateIdeas} disabled={ideaLoading}
+                style={{padding:"8px 18px",background:ideaLoading?"#9BB5B0":UI.teal,color:"#fff",border:"none",
+                        borderRadius:8,fontSize:12,fontWeight:700,cursor:ideaLoading?"not-allowed":"pointer",
+                        fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                {ideaLoading?"생성 중...":"✦ 생성"}
+              </button>
+            </div>
+
+            {/* 결과 목록 */}
+            <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
+              {ideaLoading&&(
+                <div style={{textAlign:"center",padding:"40px",color:UI.muted,fontSize:12}}>
+                  <div style={{fontSize:28,marginBottom:12}}>✦</div>
+                  Claude가 콘텐츠 플랜을 만들고 있습니다...
+                </div>
+              )}
+              {!ideaLoading&&ideas.length===0&&(
+                <div style={{textAlign:"center",padding:"40px 20px",color:UI.hint,fontSize:12}}>
+                  <div style={{fontSize:36,marginBottom:12,opacity:.3}}>💡</div>
+                  진료과와 스타일을 선택하고<br/>생성 버튼을 눌러보세요.
+                  {ideaMock&&<div style={{marginTop:8,fontSize:10,color:UI.accent}}>* API 키 없음 — 데모 데이터 표시</div>}
+                </div>
+              )}
+              {ideas.map((idea,idx)=>(
+                <div key={idx} style={{border:`1px solid ${UI.border}`,borderRadius:12,
+                                       overflow:"hidden",background:UI.surface}}>
+                  {/* 카드 헤더 */}
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+                               background:`linear-gradient(90deg,${UI.teal}12,transparent)`,
+                               borderBottom:`1px solid ${UI.border}`}}>
+                    <span style={{fontSize:18}}>{idea.emoji}</span>
+                    <div style={{flex:1}}>
+                      <span style={{fontSize:11,fontWeight:800,color:UI.teal,marginRight:8}}>
+                        {idea.day}요일
+                      </span>
+                      <span style={{fontSize:12,fontWeight:700,color:UI.txt}}>{idea.title}</span>
+                    </div>
+                    <span style={{fontSize:9,color:UI.hint,background:UI.bg,padding:"2px 8px",
+                                  borderRadius:10,fontWeight:700}}>{idea.type}</span>
+                  </div>
+                  {/* 카드 바디 */}
+                  <div style={{padding:"12px 14px"}}>
+                    <div style={{fontSize:12,fontWeight:700,color:UI.accent,marginBottom:4}}>
+                      "{idea.hook}"
+                    </div>
+                    <div style={{fontSize:11,color:UI.muted,lineHeight:1.6,whiteSpace:"pre-line",marginBottom:8}}>
+                      {idea.caption}
+                    </div>
+                    <div style={{fontSize:10,color:UI.teal,marginBottom:10}}>{idea.hashtags}</div>
+                    {/* 액션 버튼 */}
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>useIdeaForDesign(idea)}
+                        style={{flex:1,padding:"7px",background:UI.teal,color:"#fff",border:"none",
+                                borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                        ✦ 이 아이디어로 디자인
+                      </button>
+                      <button onClick={()=>{
+                          setMainText(idea.hook);
+                          setSubText(idea.title);
+                          setShowIdeas(false);
+                          showToast("텍스트 적용 완료 ✓");
+                        }}
+                        style={{padding:"7px 12px",background:UI.surface,color:UI.muted,
+                                border:`1px solid ${UI.border}`,borderRadius:8,fontSize:11,
+                                fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                        텍스트만
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {ideaMock&&ideas.length>0&&(
+              <div style={{marginTop:10,fontSize:10,color:UI.hint,textAlign:"center"}}>
+                * ANTHROPIC_API_KEY 없음 — 데모 데이터입니다
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 브랜드 키트 모달 ── */}
+      {showBrandKit&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:500,
+                     display:"flex",alignItems:"center",justifyContent:"center"}}
+             onClick={()=>setShowBrandKit(false)}>
+          <div style={{background:"#fff",borderRadius:18,padding:"28px",maxWidth:560,width:"94vw",
+                       maxHeight:"88vh",display:"flex",flexDirection:"column",
+                       boxShadow:"0 24px 80px rgba(0,0,0,.35)"}}
+               onClick={e=>e.stopPropagation()}>
+
+            {/* 헤더 */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:UI.txt}}>🎨 브랜드 키트</div>
+                <div style={{fontSize:11,color:UI.muted,marginTop:2}}>병원별 컬러·폰트·레이아웃 저장</div>
+              </div>
+              <button onClick={()=>setShowBrandKit(false)}
+                style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:UI.muted}}>✕</button>
+            </div>
+
+            {/* 현재 설정 저장 */}
+            <div style={{background:UI.bg,borderRadius:12,padding:"14px",marginBottom:16}}>
+              <div style={{fontSize:11,fontWeight:700,color:UI.muted,marginBottom:8}}>현재 설정을 저장</div>
+              {/* 컬러 미리보기 */}
+              <div style={{display:"flex",gap:5,marginBottom:10}}>
+                {[canvasBg,contentBg,textColor,accentColor,subColor].map((c,i)=>(
+                  <div key={i} style={{width:24,height:24,borderRadius:6,background:c,
+                                       border:`1px solid ${UI.border}`,flexShrink:0}}/>
+                ))}
+                <div style={{fontSize:10,color:UI.hint,alignSelf:"center",marginLeft:4}}>
+                  {template} · {ratio} · {FONT_PAIRS[fontPair]?.label}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <input value={kitNameInput} onChange={e=>setKitNameInput(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&saveKit()}
+                  placeholder="병원 이름 (예: 피부과 A클리닉)"
+                  style={{flex:1,border:`1px solid ${UI.border}`,borderRadius:8,padding:"8px 10px",
+                          fontSize:12,fontFamily:"inherit",background:"#fff",color:UI.txt,outline:"none"}}/>
+                <button onClick={saveKit}
+                  style={{padding:"8px 16px",background:UI.teal,color:"#fff",border:"none",
+                          borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                          whiteSpace:"nowrap"}}>
+                  저장
+                </button>
+              </div>
+            </div>
+
+            {/* 저장된 키트 목록 */}
+            <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:8}}>
+              {brandKits.length===0?(
+                <div style={{textAlign:"center",padding:"32px 20px",color:UI.hint,fontSize:12}}>
+                  <div style={{fontSize:32,marginBottom:10,opacity:.3}}>🎨</div>
+                  저장된 브랜드 키트가 없습니다.<br/>
+                  병원 이름을 입력하고 현재 설정을 저장해보세요.
+                </div>
+              ):brandKits.map(kit=>(
+                <div key={kit.id}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"12px",
+                          background:UI.bg,borderRadius:10,border:`1px solid ${UI.border}`}}>
+                  {/* 컬러 스와치 */}
+                  <div style={{display:"flex",gap:3,flexShrink:0}}>
+                    {[kit.canvasBg,kit.contentBg,kit.textColor,kit.accentColor].map((c,i)=>(
+                      <div key={i} style={{width:16,height:32,borderRadius:3,background:c,
+                                           border:`1px solid rgba(0,0,0,.08)`}}/>
+                    ))}
+                  </div>
+                  {/* 정보 */}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:UI.txt,
+                                 overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {kit.name}
+                    </div>
+                    <div style={{fontSize:10,color:UI.hint,marginTop:2}}>
+                      {kit.template} · {kit.ratio} · {FONT_PAIRS[kit.fontPair]?.label} · {new Date(kit.createdAt).toLocaleDateString("ko")}
+                    </div>
+                  </div>
+                  {/* 적용 */}
+                  <button onClick={()=>applyKit(kit)}
+                    style={{padding:"6px 14px",background:UI.teal,color:"#fff",border:"none",
+                            borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                            whiteSpace:"nowrap"}}>
+                    적용
+                  </button>
+                  {/* 삭제 */}
+                  <button onClick={()=>deleteKit(kit.id)}
+                    style={{...bS(false),padding:"5px 8px",color:"#C04020",borderColor:"#FACCB8",fontSize:11}}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* 하단 — 내보내기/가져오기 */}
+            <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${UI.border}`,
+                         display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
+              <div style={{fontSize:10,color:UI.hint,flex:1}}>
+                {brandKits.length}개 저장됨 · 브라우저 로컬 저장
+              </div>
+              <label style={{...bS(false) as any,padding:"6px 12px",cursor:"pointer",fontSize:11,
+                             border:`1.5px solid ${UI.border}`,borderRadius:8,color:UI.muted,
+                             background:UI.surface,fontWeight:700,fontFamily:"inherit"}}>
+                📥 가져오기
+                <input type="file" accept=".json" style={{display:"none"}}
+                  onChange={e=>{if(e.target.files?.[0]){importKits(e.target.files[0]);e.target.value="";}}}/>
+              </label>
+              {brandKits.length>0&&(
+                <button onClick={exportKits}
+                  style={{...bS(false),padding:"6px 12px",fontSize:11}}>
+                  📤 내보내기
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 캐러셀 모달 ── */}
+      {showCarousel&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:500,
+                     display:"flex",alignItems:"center",justifyContent:"center"}}
+             onClick={()=>setShowCarousel(false)}>
+          <div style={{background:"#fff",borderRadius:18,padding:"28px",
+                       maxWidth:600,width:"94vw",maxHeight:"88vh",display:"flex",flexDirection:"column",
+                       boxShadow:"0 24px 80px rgba(0,0,0,.35)"}}
+               onClick={e=>e.stopPropagation()}>
+
+            {/* 헤더 */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:UI.txt}}>🎞 캐러셀 제작</div>
+                <div style={{fontSize:11,color:UI.muted,marginTop:2}}>
+                  슬라이드 {carouselSlides.length}장 · 인스타 캐러셀용 순서 관리
+                </div>
+              </div>
+              <button onClick={()=>setShowCarousel(false)}
+                style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:UI.muted,padding:"4px 8px"}}>✕</button>
+            </div>
+
+            {/* 현재 캔버스 → 슬라이드 추가 버튼 */}
+            <button onClick={()=>{addCarouselSlide();}}
+              style={{width:"100%",padding:"11px",background:UI.teal,color:"#fff",border:"none",
+                      borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                      marginBottom:16,letterSpacing:".02em"}}>
+              ＋ 현재 디자인을 슬라이드로 추가
+            </button>
+
+            {/* 슬라이드 리스트 */}
+            <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
+              {carouselSlides.length===0?(
+                <div style={{textAlign:"center",padding:"40px 20px",color:UI.hint,fontSize:12}}>
+                  <div style={{fontSize:36,marginBottom:12,opacity:.3}}>🎞</div>
+                  디자인을 완성하고 슬라이드를 추가하세요.<br/>
+                  여러 장 추가 후 순서를 조정할 수 있습니다.
+                </div>
+              ):carouselSlides.map((slide,idx)=>(
+                <div key={slide.id}
+                  style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",
+                          background:UI.bg,borderRadius:10,border:`1px solid ${UI.border}`}}>
+                  {/* 순서 번호 */}
+                  <div style={{width:28,height:28,borderRadius:"50%",background:UI.teal,color:"#fff",
+                               fontSize:13,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",
+                               flexShrink:0}}>
+                    {idx+1}
+                  </div>
+                  {/* 썸네일 */}
+                  <img src={slide.thumb} alt={slide.label}
+                    style={{width:54,height:54,objectFit:"cover",borderRadius:6,
+                            border:`1px solid ${UI.border}`,flexShrink:0}}/>
+                  {/* 라벨 */}
+                  <div style={{flex:1,fontSize:12,fontWeight:600,color:UI.txt}}>{slide.label}</div>
+                  {/* 업데이트 */}
+                  <button onClick={()=>updateSlide(slide.id)}
+                    title="현재 캔버스로 이 슬라이드 업데이트"
+                    style={{...bS(false),fontSize:10,padding:"4px 8px",color:UI.teal,borderColor:UI.teal}}>
+                    업데이트
+                  </button>
+                  {/* 순서 이동 */}
+                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <button onClick={()=>moveCarouselSlide(slide.id,-1)} disabled={idx===0}
+                      style={{...bS(false),padding:"2px 6px",opacity:idx===0?.3:1,fontSize:11}}>▲</button>
+                    <button onClick={()=>moveCarouselSlide(slide.id,1)} disabled={idx===carouselSlides.length-1}
+                      style={{...bS(false),padding:"2px 6px",opacity:idx===carouselSlides.length-1?.3:1,fontSize:11}}>▼</button>
+                  </div>
+                  {/* 삭제 */}
+                  <button onClick={()=>removeCarouselSlide(slide.id)}
+                    style={{...bS(false),padding:"4px 8px",color:"#C04020",borderColor:"#FACCB8",fontSize:11}}>
+                    삭제
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* 하단 액션 */}
+            {carouselSlides.length>0&&(
+              <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${UI.border}`,
+                           display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
+                <div style={{fontSize:11,color:UI.muted,flex:1}}>
+                  {carouselSlides.length}장 · {ratio} · JPG 2배 해상도
+                </div>
+                <button onClick={()=>setCarouselSlides([])}
+                  style={{...bS(false),color:"#C04020",borderColor:"#FACCB8",fontSize:11}}>
+                  전체 삭제
+                </button>
+                <button onClick={downloadAllSlides}
+                  style={{padding:"9px 20px",background:UI.accent,color:"#fff",border:"none",
+                          borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  ⬇ 전체 다운로드
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 토스트 */}
       <div style={{position:"fixed",bottom:20,left:"50%",
