@@ -421,7 +421,9 @@ export default function InstaDesignerPage() {
   }
 
   // ── 레이아웃 적용 ────────────────────────────────────
-  // photo-bottom/photo-top: clipPath으로 사진 영역을 실제 클리핑 (overlay rect 방식 제거)
+  // photo-bottom/photo-top: overlay rect으로 사진 영역 밖을 덮음 (clipPath 방식 제거)
+  // Fabric.js 5.x에서 clipPath + objectCaching:true 조합이 충돌하여 이미지가 잘리는 버그 존재.
+  // preserveObjectStacking:true 덕분에 overlay rect은 항상 이미지 위에 유지됨 → 시각적으로 동일.
   // keepOffset=true: 사용자가 드래그한 위치 오프셋 유지 (photoPct·zoom·contentBg 변경 시)
   function applyLayout(img:any, tmpl:Template, cw:number, ch:number, keepLogo?:boolean, fitMode:FitMode=photoFit, pct:number=photoPct, zoomPct:number=photoZoom, keepOffset?:boolean){
     const Fab=getFab(); if(!Fab||!fabricRef.current) return;
@@ -439,6 +441,9 @@ export default function InstaDesignerPage() {
     const freshImg = tmpl!=="text-only" ? makeFreshImage(img) : img;
     if(freshImg) img = freshImg;
 
+    // clipPath 제거 (이전 이미지에 남아있을 수 있으므로 명시적 초기화)
+    if(img) img.clipPath = undefined;
+
     // 클리어 후 배경 설정
     fc.clear();
     fc.setBackgroundColor(canvasBg,()=>{});
@@ -447,24 +452,20 @@ export default function InstaDesignerPage() {
       const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
       fitArea(img,cw,0,photoH,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
-      // clipPath: 이미지를 사진 영역(0~photoH)으로 실제 클리핑
-      // absolutePositioned:true → 캔버스 좌표계 기준으로 고정 (이미지 이동해도 클립 영역 유지)
-      img.clipPath=new Fab.Rect({left:0,top:0,width:cw,height:photoH,absolutePositioned:true});
       fc.add(img);
-      // 하단 크림 배경
-      fc.add(new Fab.Rect({left:-2,top:photoH,width:cw+4,height:textH,
-        fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      // 하단 크림 배경 — 이미지 위에 쌓여 사진 영역 밖 오버플로우를 덮음
+      // evented:true + selectable:false → 텍스트 영역 클릭이 이미지로 전달되지 않음
+      fc.add(new Fab.Rect({left:-2,top:photoH-1,width:cw+4,height:textH+2,
+        fill:contentBg,selectable:false,evented:true,name:"layout-bg"}));
 
     } else if(tmpl==="photo-top"){
       const photoH=Math.round(ch*(pct/100));
       const textH=ch-photoH;
       fitArea(img,cw,textH,photoH,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
-      // clipPath: 이미지를 사진 영역(textH~ch)으로 실제 클리핑
-      img.clipPath=new Fab.Rect({left:0,top:textH,width:cw,height:photoH,absolutePositioned:true});
       fc.add(img);
-      // 상단 크림 배경
-      fc.add(new Fab.Rect({left:-2,top:0,width:cw+4,height:textH,
-        fill:contentBg,selectable:false,evented:false,name:"layout-bg"}));
+      // 상단 크림 배경 — 이미지 위에 쌓여 텍스트 영역 오버플로우를 덮음
+      fc.add(new Fab.Rect({left:-2,top:0,width:cw+4,height:textH+1,
+        fill:contentBg,selectable:false,evented:true,name:"layout-bg"}));
 
     } else if(tmpl==="photo-overlay"){
       fitArea(img,cw,0,ch,fitMode,0,cw,zoomPct,userDeltaX,userDeltaY);
@@ -811,6 +812,20 @@ export default function InstaDesignerPage() {
     const a=document.createElement("a");a.href=url;
     a.download=`photoclinic_${ratio.replace(":","x")}_${Date.now()}.${fmt==="jpeg"?"jpg":"png"}`;
     a.click();showToast("다운로드 완료 ✓");
+  };
+
+  const copyToClipboard=async()=>{
+    if(!fabricRef.current){showToast("에디터 준비 안 됨");return;}
+    fabricRef.current.discardActiveObject();ensureFixedOrder();
+    const url=fabricRef.current.toDataURL({format:"png",quality:1,multiplier:2});
+    try{
+      const res=await fetch(url);
+      const blob=await res.blob();
+      await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);
+      showToast("클립보드에 복사됨 ✓");
+    }catch{
+      showToast("복사 실패 — 브라우저에서 권한 필요");
+    }
   };
 
   const {w:cw,h:ch}=getDims();
@@ -1423,8 +1438,43 @@ export default function InstaDesignerPage() {
                 </div>
               )}
             </div>
-            <div style={{fontSize:10,color:UI.hint,marginTop:10,textAlign:"center"}}>
-              {cw}×{ch}px · {ratio} · 다운로드 2배 · ⌘Z 취소 / ⌘Y 다시실행
+            {/* 다운로드 버튼 — 캔버스 바로 아래 */}
+            <div style={{marginTop:14,display:"flex",flexDirection:"column",alignItems:"center",gap:8,width:"100%"}}>
+              <div style={{display:"flex",gap:8}}>
+                <button
+                  onClick={()=>download("png")}
+                  style={{display:"flex",alignItems:"center",gap:6,padding:"10px 22px",
+                          background:UI.teal,color:"#fff",border:"none",borderRadius:10,
+                          fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                          boxShadow:"0 3px 12px rgba(21,88,85,.25)",transition:"opacity .15s"}}
+                  onMouseOver={e=>(e.currentTarget.style.opacity="0.85")}
+                  onMouseOut={e=>(e.currentTarget.style.opacity="1")}>
+                  ⬇ PNG 저장
+                </button>
+                <button
+                  onClick={()=>download("jpeg")}
+                  style={{display:"flex",alignItems:"center",gap:6,padding:"10px 22px",
+                          background:UI.surface,color:UI.teal,border:`1.5px solid ${UI.teal}`,
+                          borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                          transition:"opacity .15s"}}
+                  onMouseOver={e=>(e.currentTarget.style.opacity="0.7")}
+                  onMouseOut={e=>(e.currentTarget.style.opacity="1")}>
+                  ⬇ JPG 저장
+                </button>
+                <button
+                  onClick={copyToClipboard}
+                  style={{display:"flex",alignItems:"center",gap:6,padding:"10px 16px",
+                          background:UI.surface,color:UI.muted,border:`1.5px solid ${UI.border}`,
+                          borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                          transition:"opacity .15s"}}
+                  onMouseOver={e=>(e.currentTarget.style.opacity="0.7")}
+                  onMouseOut={e=>(e.currentTarget.style.opacity="1")}>
+                  📋 복사
+                </button>
+              </div>
+              <div style={{fontSize:10,color:UI.hint,textAlign:"center"}}>
+                {cw}×{ch}px ({cw*2}×{ch*2} 2배) · ⌘Z 취소 / ⌘Y 다시실행
+              </div>
             </div>
           </div>
         </main>
